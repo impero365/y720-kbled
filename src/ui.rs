@@ -290,18 +290,21 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
     let keyboard = gtk::DrawingArea::new();
     keyboard.add_css_class("keyboard");
     keyboard.set_hexpand(true);
-    // A DrawingArea does not report a height for its width. Setting one from
-    // the resize signal stores a minimum, taken from the first wider
-    // allocation, and that minimum survives until some later resize.
-    let layout = keyboard_layout();
-    let keyboard_frame = gtk::AspectFrame::new(
-        0.5,
-        0.5,
-        (layout.width / layout.height) as f32,
-        false,
-    );
-    keyboard_frame.set_hexpand(true);
-    keyboard_frame.set_child(Some(&keyboard));
+    keyboard.set_size_request(-1, 280);
+    let keyboard_for_size = keyboard.clone();
+    let sized = std::cell::Cell::new(0i32);
+    keyboard.connect_resize(move |_, width, _| {
+        if width < 32 {
+            return;
+        }
+        let layout = keyboard_layout();
+        let height = ((width as f64) * layout.height / layout.width).round() as i32;
+        let height = height.clamp(200, 380);
+        if sized.get() != height {
+            sized.set(height);
+            keyboard_for_size.set_size_request(-1, height);
+        }
+    });
     let zone_caption = gtk::Label::new(Some("Click a key"));
     zone_caption.add_css_class("zone-name");
     zone_caption.set_halign(Align::Start);
@@ -312,7 +315,7 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
     let caption_row = gtk::Box::new(Orientation::Horizontal, 12);
     caption_row.append(&zone_caption);
     caption_row.append(&zone_detail);
-    keyboard_card.append(&keyboard_frame);
+    keyboard_card.append(&keyboard);
     keyboard_card.append(&caption_row);
 
     let color_card = card();
