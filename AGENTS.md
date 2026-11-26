@@ -18,7 +18,7 @@ Lenovo Y720-15IKB. Keep the ITE33D1 reports: four 6-byte feature reports `[0xCC,
 
 - Backlight: hidraw whose parent is `048d:837a`. Match `ATTRS{id/vendor}` and `ATTRS{id/product}`. There is no sysfs `name` equal to `ITE33D1:00 048D:837A`.
 - Hotkeys: input node named exactly `ITE Tech. Inc. ITE Device(8910) Keyboard`. Do not use the sibling `Wireless Radio Control` node (`048d:c100` as well) or the AT keyboard. Scan codes: Fn+Space `786512`, numpad 7 `786515`.
-- Zones are left to right, then the numpad, indexes 0–3. Modes: heartbeat 0, breath 1, smooth 2, always_on 3, wave 4. Colors 0–19. Brightness 0–5.
+- Zones are left to right, then the numpad, indexes 0–3. Modes: heartbeat 0, breath 1, smooth 2, always_on 3, wave 4. Colors 0–19. The brightness byte is still 0–5. On this keyboard 2 and 3 are the same intensity, and 4 and 5 are the same intensity. The window offers Off, Low, Medium, and High, and writes 0, 1, 2, and 4. Keep accepting 3 and 5 in saved profiles and in `set`.
 - Do not load a kernel module. Leave extreme cooling out.
 
 The udev rule is `packaging/70-y720-kbled.rules`. Do not filter on `ACTION=="add"`; `udevadm trigger` would skip it. `GROUP="y720"` and `MODE="0660"` on those two nodes only.

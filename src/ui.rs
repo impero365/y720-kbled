@@ -38,13 +38,15 @@ const COLORS: [(&str, &str); 20] = [
     ("#000000", "Black"),
 ];
 
-const BRIGHTNESS: [&str; 6] = ["Off", "Low", "Medium", "High", "Ultra", "Enough"];
-const ZONE_NAMES: [&str; 4] = ["Left", "Center left", "Center right", "Numpad"];
+const BRIGHTNESS: [&str; 4] = ["Off", "Low", "Medium", "High"];
+/// Bytes written for those four labels. On this keyboard 3 matches 2, and 5 matches 4.
+const BRIGHTNESS_VALUES: [u8; 4] = [0, 1, 2, 4];
+const ZONE_NAMES: [&str; 4] = ["Left", "Center", "Right", "Numpad"];
 const MODES: [(BacklightMode, &str); 5] = [
+    (BacklightMode::AlwaysOn, "Always on"),
     (BacklightMode::Heartbeat, "Heartbeat"),
     (BacklightMode::Breath, "Breath"),
     (BacklightMode::Smooth, "Smooth"),
-    (BacklightMode::AlwaysOn, "Always on"),
     (BacklightMode::Wave, "Wave"),
 ];
 
@@ -67,7 +69,7 @@ struct Panel {
     hover_zone: std::cell::Cell<Option<usize>>,
     color_value: gtk::Label,
     swatches: [gtk::Button; 20],
-    brightness: [gtk::Button; 6],
+    brightness: [gtk::Button; 4],
     modes: [gtk::Button; 5],
 }
 
@@ -226,7 +228,7 @@ fn install_style() {
 fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -> Panel {
     let window = gtk::ApplicationWindow::builder()
         .application(app)
-        .title("Y720 Keyboard LEDs")
+        .title("Lenovo y720 keyboard light")
         .default_width(1100)
         .default_height(860)
         .build();
@@ -242,15 +244,10 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
 
     let header = gtk::Box::new(Orientation::Vertical, 12);
     let titles = gtk::Box::new(Orientation::Vertical, 2);
-    let title = gtk::Label::new(Some("Keyboard light"));
+    let title = gtk::Label::new(Some("Lenovo y720 keyboard light"));
     title.add_css_class("title");
     title.set_halign(Align::Start);
-    let subtitle = gtk::Label::new(Some("Click a key to choose its zone."));
-    subtitle.add_css_class("muted");
-    subtitle.set_halign(Align::Start);
-    subtitle.set_wrap(true);
     titles.append(&title);
-    titles.append(&subtitle);
 
     let profile_model = gtk::StringList::new(&[]);
     let expression = gtk::PropertyExpression::new(
@@ -350,8 +347,8 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
 
     let brightness_card = card();
     brightness_card.append(&section("Brightness"));
-    let brightness_row = choice_flow(6);
-    let brightness: [gtk::Button; 6] = std::array::from_fn(|index| {
+    let brightness_row = choice_flow(4);
+    let brightness: [gtk::Button; 4] = std::array::from_fn(|index| {
         let button = gtk::Button::with_label(BRIGHTNESS[index]);
         button.add_css_class("choice");
         brightness_row.insert(&button, -1);
@@ -496,7 +493,7 @@ fn wire_controls(panel: &Rc<Panel>) {
             with_config(&ui, |config| {
                 let zone = ui.selected_zone.get();
                 if let Some(profile) = config.profiles.get_mut(config.selected) {
-                    profile.zones[zone].brightness = index as u8;
+                    profile.zones[zone].brightness = BRIGHTNESS_VALUES[index];
                 }
             });
         });
@@ -615,10 +612,7 @@ impl Panel {
             .get(zone.color as usize)
             .map(|(_, name)| *name)
             .unwrap_or("Color");
-        let brightness = BRIGHTNESS
-            .get(zone.brightness as usize)
-            .copied()
-            .unwrap_or("");
+        let brightness = brightness_name(zone.brightness);
         self.zone_caption
             .set_text(ZONE_NAMES.get(zone_index).copied().unwrap_or("Zone"));
         self.zone_detail
@@ -636,7 +630,7 @@ impl Panel {
         for (index, button) in self.brightness.iter().enumerate() {
             set_on(
                 button,
-                index == profile.zones[zone_index].brightness as usize,
+                index == brightness_choice(profile.zones[zone_index].brightness),
             );
         }
         for (index, button) in self.modes.iter().enumerate() {
@@ -900,6 +894,29 @@ fn set_on(widget: &impl WidgetExt, on: bool) {
     }
 }
 
+fn brightness_name(value: u8) -> &'static str {
+    BRIGHTNESS[brightness_choice(value)]
+}
+
+fn brightness_choice(value: u8) -> usize {
+    match value {
+        0 => 0,
+        1 => 1,
+        2 | 3 => 2,
+        _ => 3,
+    }
+}
+
+/// 3 is the same step as 2, and 5 is the same step as 4.
+fn visible_brightness(value: u8) -> u8 {
+    match value {
+        0 => 0,
+        1 => 1,
+        2 | 3 => 2,
+        _ => 4,
+    }
+}
+
 fn stylesheet() -> String {
     let mut css = String::from(
         r#"
@@ -1013,6 +1030,45 @@ fn stylesheet() -> String {
         popover, popover contents {
           background-color: #1b1d24;
           color: #f4f5f7;
+        }
+        dropdown.profile > button:hover {
+          background: #2a2e3c;
+          background-image: none;
+        }
+        dropdown.profile popover listview,
+        popover.menu listview {
+          background-color: #1b1d24;
+          background-image: none;
+          color: #f4f5f7;
+        }
+        dropdown.profile popover listview > row,
+        popover.menu listview > row {
+          background-color: #1b1d24;
+          background-image: none;
+          color: #f4f5f7;
+          border-radius: 8px;
+          padding: 6px 10px;
+        }
+        dropdown.profile popover listview > row:hover,
+        popover.menu listview > row:hover,
+        popover.menu listview > row.activatable:hover {
+          background-color: #5c657e;
+          background-image: none;
+          color: #ffffff;
+        }
+        dropdown.profile popover listview > row:selected,
+        dropdown.profile popover listview > row:selected:hover,
+        popover.menu listview > row:selected,
+        popover.menu listview > row:selected:hover,
+        popover.menu listview > row.activatable:selected,
+        popover.menu listview > row.activatable:selected:hover {
+          background: #f4f5f7;
+          background-color: #f4f5f7;
+          background-image: none;
+          color: #14151a;
+        }
+        dropdown.profile popover listview > row label {
+          color: inherit;
         }
         "#,
     );
@@ -1149,7 +1205,7 @@ fn place_rows(rows: &[&[f64]], numpad: bool) -> (Vec<KeyGeom>, f64) {
 }
 
 /// Column bands from Izurii's `getKeyRow`. On the bottom row, keys to the
-/// right of the spacebar belong to the center-right zone.
+/// right of the spacebar belong to the right zone.
 fn zone_of(numpad: bool, row: usize, index: usize) -> u8 {
     if numpad {
         return 3;
@@ -1233,7 +1289,7 @@ fn zone_paints(panel: &Panel) -> [ZonePaint; 4] {
             .unwrap_or("#8b909c");
         paints[index] = ZonePaint {
             rgb: parse_hex(hex),
-            brightness: zone.brightness.min(5),
+            brightness: visible_brightness(zone.brightness),
             black: zone.color == 19,
         };
     }
@@ -1396,7 +1452,14 @@ mod tests {
     #[test]
     fn palette_matches_the_keyboard_ranges() {
         assert_eq!(COLORS.len(), 20);
-        assert_eq!(BRIGHTNESS.len(), 6);
+        assert_eq!(BRIGHTNESS.len(), 4);
+        assert_eq!(BRIGHTNESS_VALUES, [0, 1, 2, 4]);
+        assert_eq!(brightness_name(2), "Medium");
+        assert_eq!(brightness_name(3), "Medium");
+        assert_eq!(brightness_name(4), "High");
+        assert_eq!(brightness_name(5), "High");
+        assert_eq!(visible_brightness(3), 2);
+        assert_eq!(visible_brightness(5), 4);
         assert_eq!(MODES.len(), 5);
         assert_eq!(ZONE_NAMES.len(), 4);
         assert!(stylesheet().contains("box.chip.c19"));
@@ -1411,7 +1474,7 @@ mod tests {
         assert_eq!(zone_of(false, 2, 8), 1);
         assert_eq!(zone_of(false, 2, 9), 2);
         assert_eq!(zone_of(false, 4, 13), 2);
-        // The spacebar stays in the center-left zone. Keys to its right do not.
+        // The spacebar stays in the center zone. Keys to its right do not.
         assert_eq!(zone_of(false, 5, 4), 1);
         assert_eq!(zone_of(false, 5, 5), 2);
         assert_eq!(zone_of(false, 5, 8), 2);
