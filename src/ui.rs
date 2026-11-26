@@ -61,8 +61,10 @@ struct Panel {
     rename_profile: gtk::Button,
     delete_profile: gtk::Button,
     apply_brightness: gtk::Button,
-    zone_buttons: [gtk::Button; 4],
-    zone_details: [gtk::Label; 4],
+    keyboard: gtk::DrawingArea,
+    zone_caption: gtk::Label,
+    zone_detail: gtk::Label,
+    hover_zone: std::cell::Cell<Option<usize>>,
     color_value: gtk::Label,
     swatches: [gtk::Button; 20],
     brightness: [gtk::Button; 6],
@@ -226,9 +228,9 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
         .application(app)
         .title("Y720 Keyboard LEDs")
         .default_width(1100)
-        .default_height(700)
+        .default_height(860)
         .build();
-    window.set_size_request(640, 400);
+    window.set_size_request(640, 480);
     window.set_icon_name(Some("y720-kbled"));
 
     let page = gtk::Box::new(Orientation::Vertical, 18);
@@ -243,9 +245,7 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
     let title = gtk::Label::new(Some("Keyboard light"));
     title.add_css_class("title");
     title.set_halign(Align::Start);
-    let subtitle = gtk::Label::new(Some(
-        "Four zones, from the left of the keyboard to the numpad.",
-    ));
+    let subtitle = gtk::Label::new(Some("Click a key to choose its zone."));
     subtitle.add_css_class("muted");
     subtitle.set_halign(Align::Start);
     subtitle.set_wrap(true);
@@ -286,35 +286,37 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
     notice.set_wrap(true);
     notice.set_visible(false);
 
-    let zones = gtk::Box::new(Orientation::Horizontal, 10);
-    zones.set_homogeneous(true);
-    let mut zone_details: [Option<gtk::Label>; 4] = std::array::from_fn(|_| None);
-    let zone_buttons: [gtk::Button; 4] = std::array::from_fn(|index| {
-        let button = gtk::Button::new();
-        button.add_css_class("zone");
-        button.set_hexpand(true);
-        let text = gtk::Box::new(Orientation::Vertical, 4);
-        text.set_halign(Align::Start);
-        let name = gtk::Label::new(Some(ZONE_NAMES[index]));
-        name.add_css_class("zone-name");
-        name.set_halign(Align::Start);
-        let detail = gtk::Label::new(Some(""));
-        detail.add_css_class("muted");
-        detail.set_halign(Align::Start);
-        text.append(&name);
-        text.append(&detail);
-        button.set_child(Some(&text));
-        zones.append(&button);
-        zone_details[index] = Some(detail);
-        button
+    let keyboard_card = card();
+    let keyboard = gtk::DrawingArea::new();
+    keyboard.add_css_class("keyboard");
+    keyboard.set_hexpand(true);
+    keyboard.set_size_request(-1, 280);
+    let keyboard_for_size = keyboard.clone();
+    let sized = std::cell::Cell::new(0i32);
+    keyboard.connect_resize(move |_, width, _| {
+        if width < 32 {
+            return;
+        }
+        let layout = keyboard_layout();
+        let height = ((width as f64) * layout.height / layout.width).round() as i32;
+        let height = height.clamp(200, 380);
+        if sized.get() != height {
+            sized.set(height);
+            keyboard_for_size.set_size_request(-1, height);
+        }
     });
-    let zone_details = zone_details.map(|label| label.expect("zone detail"));
-    let hint = gtk::Label::new(Some(
-        "Choose a zone, then a color and a brightness. The zone itself does not change the keyboard.",
-    ));
-    hint.add_css_class("muted");
-    hint.set_halign(Align::Start);
-    hint.set_wrap(true);
+    let zone_caption = gtk::Label::new(Some("Click a key"));
+    zone_caption.add_css_class("zone-name");
+    zone_caption.set_halign(Align::Start);
+    zone_caption.set_hexpand(true);
+    let zone_detail = gtk::Label::new(None);
+    zone_detail.add_css_class("muted");
+    zone_detail.set_halign(Align::End);
+    let caption_row = gtk::Box::new(Orientation::Horizontal, 12);
+    caption_row.append(&zone_caption);
+    caption_row.append(&zone_detail);
+    keyboard_card.append(&keyboard);
+    keyboard_card.append(&caption_row);
 
     let color_card = card();
     let color_heading = gtk::Box::new(Orientation::Horizontal, 12);
@@ -381,8 +383,7 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
 
     page.append(&header);
     page.append(&notice);
-    page.append(&zones);
-    page.append(&hint);
+    page.append(&keyboard_card);
     page.append(&color_card);
     page.append(&split);
 
@@ -406,8 +407,10 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
         rename_profile: rename,
         delete_profile,
         apply_brightness,
-        zone_buttons,
-        zone_details,
+        keyboard,
+        zone_caption,
+        zone_detail,
+        hover_zone: std::cell::Cell::new(None),
         color_value,
         swatches,
         brightness,
@@ -438,13 +441,42 @@ fn wire_controls(panel: &Rc<Panel>) {
         });
     });
 
-    for (index, button) in panel.zone_buttons.iter().enumerate() {
-        let ui = Rc::clone(panel);
-        button.connect_clicked(move |_| {
-            ui.selected_zone.set(index);
+    let ui = Rc::clone(panel);
+    panel.keyboard.set_draw_func(move |_, cr, width, height| {
+        draw_keyboard(&ui, cr, width, height);
+    });
+
+    let click = gtk::GestureClick::new();
+    click.set_button(1);
+    let ui = Rc::clone(panel);
+    click.connect_released(move |_, _, x, y| {
+        if let Some(zone) = zone_at(ui.keyboard.width(), ui.keyboard.height(), x, y) {
+            ui.selected_zone.set(zone);
             ui.render();
-        });
-    }
+        }
+    });
+    panel.keyboard.add_controller(click);
+
+    let motion = gtk::EventControllerMotion::new();
+    let ui = Rc::clone(panel);
+    motion.connect_motion(move |_, x, y| {
+        let next = zone_at(ui.keyboard.width(), ui.keyboard.height(), x, y);
+        if next != ui.hover_zone.get() {
+            ui.hover_zone.set(next);
+            ui.keyboard.queue_draw();
+            ui.keyboard
+                .set_cursor_from_name(next.map(|_| "pointer"));
+        }
+    });
+    let ui = Rc::clone(panel);
+    motion.connect_leave(move |_| {
+        if ui.hover_zone.get().is_some() {
+            ui.hover_zone.set(None);
+            ui.keyboard.set_cursor_from_name(None);
+            ui.keyboard.queue_draw();
+        }
+    });
+    panel.keyboard.add_controller(motion);
 
     for (index, button) in panel.swatches.iter().enumerate() {
         let ui = Rc::clone(panel);
@@ -578,20 +610,20 @@ impl Panel {
         self.delete_profile
             .set_sensitive(config.profiles.len() >= 2);
 
-        for (index, button) in self.zone_buttons.iter().enumerate() {
-            let zone = profile.zones[index];
-            set_color_class(button, zone.color);
-            set_on(button, index == zone_index);
-            let color_name = COLORS
-                .get(zone.color as usize)
-                .map(|(_, name)| *name)
-                .unwrap_or("Color");
-            let brightness = BRIGHTNESS
-                .get(zone.brightness as usize)
-                .copied()
-                .unwrap_or("");
-            self.zone_details[index].set_text(&format!("{color_name} · {brightness}"));
-        }
+        let zone = profile.zones[zone_index];
+        let color_name = COLORS
+            .get(zone.color as usize)
+            .map(|(_, name)| *name)
+            .unwrap_or("Color");
+        let brightness = BRIGHTNESS
+            .get(zone.brightness as usize)
+            .copied()
+            .unwrap_or("");
+        self.zone_caption
+            .set_text(ZONE_NAMES.get(zone_index).copied().unwrap_or("Zone"));
+        self.zone_detail
+            .set_text(&format!("{color_name} · {brightness}"));
+        self.keyboard.queue_draw();
 
         let (hex, color_name) = COLORS
             .get(profile.zones[zone_index].color as usize)
@@ -868,13 +900,6 @@ fn set_on(widget: &impl WidgetExt, on: bool) {
     }
 }
 
-fn set_color_class(widget: &impl WidgetExt, color: u8) {
-    for index in 0..COLORS.len() {
-        widget.remove_css_class(&format!("c{index}"));
-    }
-    widget.add_css_class(&format!("c{color}"));
-}
-
 fn stylesheet() -> String {
     let mut css = String::from(
         r#"
@@ -892,7 +917,7 @@ fn stylesheet() -> String {
           font-weight: 700;
         }
         .muted { color: #9aa0ad; font-size: 13px; }
-        .zone-name { font-size: 15px; font-weight: 700; }
+        .zone-name { color: #f4f5f7; font-size: 15px; font-weight: 700; }
         .card {
           background-color: #171922;
           border: 1px solid #2c2f3a;
@@ -906,7 +931,7 @@ fn stylesheet() -> String {
           border-radius: 12px;
           padding: 10px 12px;
         }
-        button.action, button.primary, button.choice, button.zone, button.swatch {
+        button.action, button.primary, button.choice, button.swatch {
           min-height: 0;
         }
         button.action {
@@ -944,25 +969,6 @@ fn stylesheet() -> String {
           border: none;
           box-shadow: none;
         }
-        button.zone {
-          background: #12141a;
-          background-image: none;
-          color: #f4f5f7;
-          border-style: solid;
-          border-width: 1px 1px 1px 4px;
-          border-color: #2c2f3a;
-          border-radius: 14px;
-          padding: 14px 16px;
-          min-height: 92px;
-        }
-        button.zone:hover { background: #1a1d28; background-image: none; }
-        button.zone.on {
-          background: #1c2030;
-          background-image: none;
-          border-color: #f4f5f7;
-        }
-        button.zone label.zone-name { color: #f4f5f7; }
-        button.zone label.muted { color: #9aa0ad; }
         button.choice {
           background: #22252e;
           background-image: none;
@@ -1011,14 +1017,376 @@ fn stylesheet() -> String {
         "#,
     );
     for (index, (hex, _)) in COLORS.iter().enumerate() {
-        let rail = if *hex == "#000000" { "#8b909c" } else { hex };
         css.push_str(&format!(
-            "button.zone.c{index} {{ border-left-color: {rail}; }}\n\
-             button.zone.c{index}.on {{ border-color: #f4f5f7; border-left-color: {rail}; }}\n\
-             box.chip.c{index} {{ background: {hex}; background-image: none; }}\n"
+            "box.chip.c{index} {{ background: {hex}; background-image: none; }}\n"
         ));
     }
     css
+}
+
+const KEY_H: f64 = 40.0;
+const KEY_MARGIN: f64 = 5.0;
+const BOARD_PAD: f64 = 14.0;
+const NUMPAD_GAP: f64 = 18.0;
+
+struct KeyGeom {
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+    zone: u8,
+}
+
+struct KeyboardLayout {
+    keys: Vec<KeyGeom>,
+    width: f64,
+    height: f64,
+}
+
+struct ZonePaint {
+    rgb: (f64, f64, f64),
+    brightness: u8,
+    black: bool,
+}
+
+fn keyboard_layout() -> &'static KeyboardLayout {
+    static LAYOUT: std::sync::OnceLock<KeyboardLayout> = std::sync::OnceLock::new();
+    LAYOUT.get_or_init(build_keyboard_layout)
+}
+
+fn build_keyboard_layout() -> KeyboardLayout {
+    // Widths are the original program's key sizes. Rows share one height.
+    const MAIN: [&[f64]; 6] = [
+        &[40.0; 14],
+        &[
+            38.87, 38.87, 38.87, 38.87, 38.87, 38.87, 38.87, 38.87, 38.87, 38.87, 38.87, 38.87,
+            38.87, 55.0,
+        ],
+        &[
+            55.0, 38.87, 38.87, 38.87, 38.87, 38.87, 38.87, 38.87, 38.87, 38.87, 38.87, 38.87,
+            38.87, 38.87,
+        ],
+        &[
+            75.0, 38.9, 38.9, 38.9, 38.9, 38.9, 38.9, 38.9, 38.9, 38.9, 38.9, 38.9, 67.0,
+        ],
+        &[
+            68.0, 39.7, 39.7, 39.7, 39.7, 39.7, 39.7, 39.7, 39.7, 39.7, 39.7, 115.0,
+        ],
+        &[55.0, 47.5, 47.5, 47.5, 222.0, 47.5, 47.5, 47.5, 47.5],
+    ];
+    const NUMPAD: [&[f64]; 6] = [
+        &[35.0, 35.0, 35.0, 35.0],
+        &[35.0, 35.0, 35.0, 35.0],
+        &[35.0, 35.0, 35.0, 35.0],
+        &[35.0, 35.0, 35.0, 35.0],
+        &[48.0],
+        &[48.0, 48.0, 48.0],
+    ];
+
+    let (main, main_width) = place_rows(&MAIN, false);
+    let (mut numpad, _) = place_rows(&NUMPAD, true);
+    let numpad_x = main_width + NUMPAD_GAP;
+    for key in &mut numpad {
+        key.x += numpad_x;
+    }
+    let mut keys = main;
+    keys.append(&mut numpad);
+    for key in &mut keys {
+        key.x += BOARD_PAD;
+        key.y += BOARD_PAD;
+    }
+    let width = keys
+        .iter()
+        .map(|key| key.x + key.w + KEY_MARGIN + BOARD_PAD)
+        .fold(0.0, f64::max);
+    let height = keys
+        .iter()
+        .map(|key| key.y + key.h + KEY_MARGIN + BOARD_PAD)
+        .fold(0.0, f64::max);
+    KeyboardLayout {
+        keys,
+        width,
+        height,
+    }
+}
+
+fn place_rows(rows: &[&[f64]], numpad: bool) -> (Vec<KeyGeom>, f64) {
+    let mut placed = Vec::new();
+    for (row, widths) in rows.iter().enumerate() {
+        let y = KEY_MARGIN + row as f64 * (KEY_H + KEY_MARGIN * 2.0);
+        let mut x = KEY_MARGIN;
+        let mut row_keys = Vec::new();
+        for (index, width) in widths.iter().enumerate() {
+            row_keys.push(KeyGeom {
+                x,
+                y,
+                w: *width,
+                h: KEY_H,
+                zone: zone_of(numpad, row, index),
+            });
+            x += width + KEY_MARGIN * 2.0;
+        }
+        placed.push(row_keys);
+    }
+    let width = placed
+        .iter()
+        .flat_map(|row| row.iter())
+        .map(|key| key.x + key.w + KEY_MARGIN)
+        .fold(0.0, f64::max);
+    if numpad {
+        for row in &mut placed {
+            let row_right = row
+                .last()
+                .map(|key| key.x + key.w + KEY_MARGIN)
+                .unwrap_or(0.0);
+            let shift = (width - row_right) / 2.0;
+            for key in row {
+                key.x += shift;
+            }
+        }
+    }
+    (placed.into_iter().flatten().collect(), width)
+}
+
+/// Column bands from Izurii's `getKeyRow`. On the bottom row, keys to the
+/// right of the spacebar belong to the center-right zone.
+fn zone_of(numpad: bool, row: usize, index: usize) -> u8 {
+    if numpad {
+        return 3;
+    }
+    if index < 4 {
+        0
+    } else if index < 9 {
+        if row != 5 || index == 4 { 1 } else { 2 }
+    } else {
+        2
+    }
+}
+
+fn frame_for(width: f64, height: f64, layout: &KeyboardLayout) -> (f64, f64, f64) {
+    if width <= 1.0 || height <= 1.0 || layout.width <= 0.0 || layout.height <= 0.0 {
+        return (1.0, 0.0, 0.0);
+    }
+    let scale = (width / layout.width).min(height / layout.height);
+    let ox = (width - layout.width * scale) / 2.0;
+    let oy = (height - layout.height * scale) / 2.0;
+    (scale, ox, oy)
+}
+
+fn zone_at(width: i32, height: i32, x: f64, y: f64) -> Option<usize> {
+    let layout = keyboard_layout();
+    let (scale, ox, oy) = frame_for(width as f64, height as f64, layout);
+    if scale <= 0.0 {
+        return None;
+    }
+    let px = (x - ox) / scale;
+    let py = (y - oy) / scale;
+    // Gaps belong to the nearest key, as long as the click is on the board.
+    if !(0.0..=layout.width).contains(&px) || !(0.0..=layout.height).contains(&py) {
+        return None;
+    }
+    layout
+        .keys
+        .iter()
+        .min_by(|left, right| {
+            key_distance(left, px, py)
+                .partial_cmp(&key_distance(right, px, py))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|key| key.zone as usize)
+}
+
+fn key_distance(key: &KeyGeom, px: f64, py: f64) -> f64 {
+    let dx = if px < key.x {
+        key.x - px
+    } else if px > key.x + key.w {
+        px - (key.x + key.w)
+    } else {
+        0.0
+    };
+    let dy = if py < key.y {
+        key.y - py
+    } else if py > key.y + key.h {
+        py - (key.y + key.h)
+    } else {
+        0.0
+    };
+    dx.hypot(dy)
+}
+
+fn zone_paints(panel: &Panel) -> [ZonePaint; 4] {
+    let mut paints = std::array::from_fn(|_| ZonePaint {
+        rgb: (0.45, 0.48, 0.55),
+        brightness: 2,
+        black: false,
+    });
+    let Some(config) = panel.config.borrow().clone() else {
+        return paints;
+    };
+    let Some(profile) = config.profiles.get(config.selected) else {
+        return paints;
+    };
+    for (index, zone) in profile.zones.iter().enumerate().take(4) {
+        let hex = COLORS
+            .get(zone.color as usize)
+            .map(|(hex, _)| *hex)
+            .unwrap_or("#8b909c");
+        paints[index] = ZonePaint {
+            rgb: parse_hex(hex),
+            brightness: zone.brightness.min(5),
+            black: zone.color == 19,
+        };
+    }
+    paints
+}
+
+fn parse_hex(hex: &str) -> (f64, f64, f64) {
+    let hex = hex.trim_start_matches('#');
+    let Ok(value) = u32::from_str_radix(hex, 16) else {
+        return (0.5, 0.5, 0.5);
+    };
+    (
+        ((value >> 16) & 255) as f64 / 255.0,
+        ((value >> 8) & 255) as f64 / 255.0,
+        (value & 255) as f64 / 255.0,
+    )
+}
+
+fn draw_keyboard(panel: &Panel, cr: &gtk::cairo::Context, width: i32, height: i32) {
+    let layout = keyboard_layout();
+    let (scale, ox, oy) = frame_for(width as f64, height as f64, layout);
+    let paints = zone_paints(panel);
+    let selected = panel.selected_zone.get();
+    let hover = panel.hover_zone.get();
+
+    let _ = cr.save();
+    cr.translate(ox, oy);
+    cr.scale(scale, scale);
+
+    rounded_rect(cr, 1.0, 1.0, layout.width - 2.0, layout.height - 2.0, 18.0);
+    cr.set_source_rgba(0.07, 0.08, 0.10, 1.0);
+    let _ = cr.fill_preserve();
+    cr.set_source_rgba(0.20, 0.22, 0.27, 1.0);
+    cr.set_line_width(1.0);
+    let _ = cr.stroke();
+
+    for key in &layout.keys {
+        let paint = &paints[key.zone as usize];
+        if paint.black || paint.brightness == 0 {
+            continue;
+        }
+        let emphasis = if key.zone as usize == selected {
+            1.0
+        } else if hover == Some(key.zone as usize) {
+            0.72
+        } else {
+            0.5
+        };
+        draw_glow(cr, key, paint, emphasis);
+    }
+    for key in &layout.keys {
+        let zone = key.zone as usize;
+        draw_key(
+            cr,
+            key,
+            &paints[zone],
+            zone == selected,
+            hover == Some(zone),
+        );
+    }
+    let _ = cr.restore();
+}
+
+fn draw_glow(cr: &gtk::cairo::Context, key: &KeyGeom, paint: &ZonePaint, emphasis: f64) {
+    let level = f64::from(paint.brightness) / 5.0;
+    let (r, g, b) = paint.rgb;
+    for layer in 1..=3 {
+        let grow = layer as f64 * (1.4 + 2.4 * level);
+        let alpha = emphasis * level * 0.16 / layer as f64;
+        rounded_rect(
+            cr,
+            key.x - grow,
+            key.y - grow,
+            key.w + grow * 2.0,
+            key.h + grow * 2.0,
+            6.0 + grow,
+        );
+        cr.set_source_rgba(r, g, b, alpha);
+        let _ = cr.fill();
+    }
+}
+
+fn draw_key(cr: &gtk::cairo::Context, key: &KeyGeom, paint: &ZonePaint, selected: bool, hover: bool) {
+    let (r, g, b) = if paint.black {
+        (0.55, 0.57, 0.62)
+    } else {
+        paint.rgb
+    };
+    let tint = if paint.black {
+        0.0
+    } else if selected {
+        0.28
+    } else if hover {
+        0.18
+    } else if paint.brightness == 0 {
+        0.05
+    } else {
+        0.12 + 0.08 * f64::from(paint.brightness) / 5.0
+    };
+    let top = mix_rgb((0.17, 0.18, 0.22), paint.rgb, tint);
+    let bottom = mix_rgb((0.09, 0.10, 0.12), paint.rgb, tint * 0.55);
+
+    rounded_rect(cr, key.x, key.y, key.w, key.h, 5.5);
+    let gradient = gtk::cairo::LinearGradient::new(key.x, key.y, key.x, key.y + key.h);
+    gradient.add_color_stop_rgba(0.0, top.0, top.1, top.2, 1.0);
+    gradient.add_color_stop_rgba(1.0, bottom.0, bottom.1, bottom.2, 1.0);
+    let _ = cr.set_source(&gradient);
+    let _ = cr.fill_preserve();
+
+    let edge_alpha = if paint.brightness == 0 {
+        0.38
+    } else if selected {
+        1.0
+    } else {
+        0.82
+    };
+    cr.set_line_width(if selected { 2.0 } else { 1.35 });
+    cr.set_source_rgba(r, g, b, edge_alpha);
+    let _ = cr.stroke();
+
+    if selected {
+        let inset = 3.0;
+        rounded_rect(
+            cr,
+            key.x + inset,
+            key.y + inset,
+            key.w - inset * 2.0,
+            key.h - inset * 2.0,
+            3.5,
+        );
+        cr.set_source_rgba(0.96, 0.96, 0.98, 0.9);
+        cr.set_line_width(1.15);
+        let _ = cr.stroke();
+    }
+}
+
+fn mix_rgb(base: (f64, f64, f64), tint: (f64, f64, f64), amount: f64) -> (f64, f64, f64) {
+    (
+        base.0 + (tint.0 - base.0) * amount,
+        base.1 + (tint.1 - base.1) * amount,
+        base.2 + (tint.2 - base.2) * amount,
+    )
+}
+
+fn rounded_rect(cr: &gtk::cairo::Context, x: f64, y: f64, w: f64, h: f64, radius: f64) {
+    let radius = radius.min(w / 2.0).min(h / 2.0).max(0.0);
+    let pi = std::f64::consts::PI;
+    cr.new_sub_path();
+    cr.arc(x + w - radius, y + radius, radius, -pi / 2.0, 0.0);
+    cr.arc(x + w - radius, y + h - radius, radius, 0.0, pi / 2.0);
+    cr.arc(x + radius, y + h - radius, radius, pi / 2.0, pi);
+    cr.arc(x + radius, y + radius, radius, pi, pi * 1.5);
+    cr.close_path();
 }
 
 #[cfg(test)]
@@ -1033,5 +1401,40 @@ mod tests {
         assert_eq!(ZONE_NAMES.len(), 4);
         assert!(stylesheet().contains("box.chip.c19"));
         assert!(stylesheet().contains("#e51012"));
+    }
+
+    #[test]
+    fn keyboard_zones_follow_the_original_columns() {
+        assert_eq!(zone_of(false, 0, 0), 0);
+        assert_eq!(zone_of(false, 0, 3), 0);
+        assert_eq!(zone_of(false, 2, 4), 1);
+        assert_eq!(zone_of(false, 2, 8), 1);
+        assert_eq!(zone_of(false, 2, 9), 2);
+        assert_eq!(zone_of(false, 4, 13), 2);
+        // The spacebar stays in the center-left zone. Keys to its right do not.
+        assert_eq!(zone_of(false, 5, 4), 1);
+        assert_eq!(zone_of(false, 5, 5), 2);
+        assert_eq!(zone_of(false, 5, 8), 2);
+        assert_eq!(zone_of(true, 4, 0), 3);
+
+        let layout = keyboard_layout();
+        assert_eq!(layout.keys.iter().filter(|key| key.zone == 3).count(), 20);
+        assert_eq!(layout.keys.len(), 76 + 20);
+
+        let width = layout.width.ceil() as i32;
+        let height = layout.height.ceil() as i32;
+        let (scale, ox, oy) = frame_for(width as f64, height as f64, layout);
+        for key in &layout.keys {
+            let x = ox + (key.x + key.w / 2.0) * scale;
+            let y = oy + (key.y + key.h / 2.0) * scale;
+            assert_eq!(zone_at(width, height, x, y), Some(key.zone as usize));
+        }
+        let left = &layout.keys[0];
+        let next = &layout.keys[1];
+        let gap_x = ox + ((left.x + left.w + next.x) / 2.0) * scale;
+        let gap_y = oy + (left.y + left.h / 2.0) * scale;
+        assert!(gap_x > ox + (left.x + left.w) * scale && gap_x < ox + next.x * scale);
+        assert_eq!(zone_at(width, height, gap_x, gap_y), Some(left.zone as usize));
+        assert_eq!(zone_at(width, height, 0.0, 0.0), None);
     }
 }
