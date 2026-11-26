@@ -1,11 +1,11 @@
 pkgname=y720-kbled
 pkgver=0.1.0
-pkgrel=5
+pkgrel=6
 pkgdesc='Keyboard backlight controller for the Lenovo Legion Y720'
 arch=('x86_64')
 url='https://github.com/impero365/y720-kbled'
 license=('ISC')
-depends=('gtk3' 'webkit2gtk-4.1' 'libayatana-appindicator' 'gcc-libs' 'glibc' 'sudo' 'systemd')
+depends=('gtk4' 'gcc-libs' 'glibc' 'sudo' 'systemd')
 backup=('etc/sudoers.d/y720-kbled')
 # cargo is rustup (~/.cargo/bin) or /usr/bin/cargo. Not a pacman makedepend:
 # this machine builds with rustup, and the rust package would conflict with it.

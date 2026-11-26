@@ -6,7 +6,7 @@ The service writes four 6-byte ITE33D1 feature reports (`0xCC`, mode, color, bri
 
 ## Run from a checkout
 
-Install the Rust stable toolchain, plus `gtk3`, `webkit2gtk-4.1`, and `libayatana-appindicator` (Arch names). Ubuntu 24.04 uses `libwebkit2gtk-4.1-0`, `libgtk-3-0t64`, and `libayatana-appindicator3-1`.
+Install the Rust stable toolchain and GTK 4. Arch package name: `gtk4`. Ubuntu 24.04 package name: `libgtk-4-1`. The window is GTK 4. The tray icon speaks StatusNotifier over D-Bus, which Waybar and Ubuntu's app indicator both show.
 
 ```bash
 cd y720-kbled
