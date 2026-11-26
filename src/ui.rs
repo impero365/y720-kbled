@@ -1334,13 +1334,7 @@ fn draw_keyboard(panel: &Panel, cr: &gtk::cairo::Context, width: i32, height: i3
         if paint.black || paint.brightness == 0 {
             continue;
         }
-        let emphasis = if key.zone as usize == selected {
-            1.0
-        } else if hover == Some(key.zone as usize) {
-            0.72
-        } else {
-            0.5
-        };
+        let emphasis = if hover == Some(key.zone as usize) { 0.72 } else { 0.5 };
         draw_glow(cr, key, paint, emphasis);
     }
     for key in &layout.keys {
@@ -1349,8 +1343,8 @@ fn draw_keyboard(panel: &Panel, cr: &gtk::cairo::Context, width: i32, height: i3
             cr,
             key,
             &paints[zone],
-            zone == selected,
             hover == Some(zone),
+            zone == selected,
         );
     }
     let _ = cr.restore();
@@ -1375,7 +1369,13 @@ fn draw_glow(cr: &gtk::cairo::Context, key: &KeyGeom, paint: &ZonePaint, emphasi
     }
 }
 
-fn draw_key(cr: &gtk::cairo::Context, key: &KeyGeom, paint: &ZonePaint, selected: bool, hover: bool) {
+fn draw_key(
+    cr: &gtk::cairo::Context,
+    key: &KeyGeom,
+    paint: &ZonePaint,
+    hover: bool,
+    selected: bool,
+) {
     let (r, g, b) = if paint.black {
         (0.55, 0.57, 0.62)
     } else {
@@ -1383,8 +1383,6 @@ fn draw_key(cr: &gtk::cairo::Context, key: &KeyGeom, paint: &ZonePaint, selected
     };
     let tint = if paint.black {
         0.0
-    } else if selected {
-        0.28
     } else if hover {
         0.18
     } else if paint.brightness == 0 {
@@ -1402,19 +1400,13 @@ fn draw_key(cr: &gtk::cairo::Context, key: &KeyGeom, paint: &ZonePaint, selected
     let _ = cr.set_source(&gradient);
     let _ = cr.fill_preserve();
 
-    let edge_alpha = if paint.brightness == 0 {
-        0.38
-    } else if selected {
-        1.0
-    } else {
-        0.82
-    };
-    cr.set_line_width(if selected { 2.0 } else { 1.35 });
+    let edge_alpha = if paint.brightness == 0 { 0.38 } else { 0.82 };
+    cr.set_line_width(2.6);
     cr.set_source_rgba(r, g, b, edge_alpha);
     let _ = cr.stroke();
 
     if selected {
-        let inset = 3.0;
+        let inset = 7.5;
         rounded_rect(
             cr,
             key.x + inset,
@@ -1423,7 +1415,7 @@ fn draw_key(cr: &gtk::cairo::Context, key: &KeyGeom, paint: &ZonePaint, selected
             key.h - inset * 2.0,
             3.5,
         );
-        cr.set_source_rgba(0.96, 0.96, 0.98, 0.9);
+        cr.set_source_rgba(r, g, b, 0.95);
         cr.set_line_width(1.15);
         let _ = cr.stroke();
     }
