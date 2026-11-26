@@ -1,0 +1,6 @@
+{
+  "identifier": "main",
+  "description": "Settings window for the local LED service",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

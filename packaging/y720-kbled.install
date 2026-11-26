@@ -1,0 +1,55 @@
+disable_legacy_user_units() {
+  systemctl --global disable y720-kbled.service 2>/dev/null || true
+  if ! command -v loginctl >/dev/null 2>&1; then
+    return
+  fi
+  local uid user
+  while read -r uid user _; do
+    [ "$uid" = "UID" ] && continue
+    [ -n "$user" ] || continue
+    systemctl --user --machine="${user}@.host" disable --now y720-kbled.service 2>/dev/null || true
+  done <<EOF
+$(loginctl list-users --no-legend 2>/dev/null || true)
+EOF
+}
+
+post_install() {
+  systemd-sysusers || true
+  udevadm control --reload-rules || true
+  udevadm trigger --subsystem-match=hidraw --subsystem-match=input || true
+  udevadm settle || true
+  systemctl daemon-reload || true
+  if systemctl enable --now y720-kbled.service; then
+    echo "The backlight service is enabled and applies the saved color at boot."
+  else
+    echo "y720-kbled: installed, but the service did not start."
+    echo "  systemctl status y720-kbled.service"
+  fi
+}
+
+post_upgrade() {
+  disable_legacy_user_units
+  systemd-sysusers || true
+  udevadm control --reload-rules || true
+  udevadm trigger --subsystem-match=hidraw --subsystem-match=input || true
+  udevadm settle || true
+  systemctl daemon-reload || true
+  systemctl enable y720-kbled.service || true
+  systemctl restart y720-kbled.service || true
+}
+
+pre_remove() {
+  systemctl disable --now y720-kbled.service || true
+  disable_legacy_user_units
+}
+
+post_remove() {
+  udevadm control --reload-rules || true
+  udevadm trigger --subsystem-match=hidraw --subsystem-match=input || true
+  systemctl daemon-reload || true
+  rm -rf /run/y720-kbled
+  rm -rf /var/lib/y720-kbled
+  if id y720 >/dev/null 2>&1; then
+    userdel y720 || echo "y720-kbled: could not remove system user y720"
+  fi
+}

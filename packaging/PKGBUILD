@@ -1,0 +1,33 @@
+pkgname=y720-kbled
+pkgver=0.1.0
+pkgrel=5
+pkgdesc='Keyboard backlight controller for the Lenovo Legion Y720'
+arch=('x86_64')
+url='https://github.com/impero365/y720-kbled'
+license=('ISC')
+depends=('gtk3' 'webkit2gtk-4.1' 'libayatana-appindicator' 'gcc-libs' 'glibc' 'sudo' 'systemd')
+backup=('etc/sudoers.d/y720-kbled')
+# cargo is rustup (~/.cargo/bin) or /usr/bin/cargo. Not a pacman makedepend:
+# this machine builds with rustup, and the rust package would conflict with it.
+options=('!debug' '!lto')
+install=y720-kbled.install
+
+build() {
+  if [[ -x "$HOME/.cargo/bin/cargo" ]]; then
+    export PATH="$HOME/.cargo/bin:$PATH"
+  fi
+  command -v cargo >/dev/null
+  cd "$startdir/.."
+  cargo build --release --locked --offline --manifest-path "$startdir/../Cargo.toml"
+}
+
+package() {
+  cd "$startdir/.."
+  install -Dm755 target/release/y720-kbled "$pkgdir/usr/bin/y720-kbled"
+  install -Dm644 packaging/70-y720-kbled.rules "$pkgdir/usr/lib/udev/rules.d/70-y720-kbled.rules"
+  install -Dm644 packaging/y720-kbled.sysusers "$pkgdir/usr/lib/sysusers.d/y720-kbled.conf"
+  install -Dm644 packaging/y720-kbled.service "$pkgdir/usr/lib/systemd/system/y720-kbled.service"
+  install -Dm440 packaging/y720-kbled.sudoers "$pkgdir/etc/sudoers.d/y720-kbled"
+  install -Dm644 packaging/y720-kbled.desktop "$pkgdir/usr/share/applications/y720-kbled.desktop"
+  install -Dm644 assets/128x128.png "$pkgdir/usr/share/icons/hicolor/128x128/apps/y720-kbled.png"
+}

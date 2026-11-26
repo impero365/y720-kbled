@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Y720 Keyboard LEDs
+Comment=Control the Lenovo Legion Y720 keyboard backlight
+Exec=y720-kbled --ui
+Icon=y720-kbled
+Terminal=false
+Type=Application
+Categories=Settings;HardwareSettings;
+StartupNotify=true

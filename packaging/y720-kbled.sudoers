@@ -1,0 +1,3 @@
+# The backlight service may open the settings window for the active login.
+# It cannot pass any other command.
+y720 ALL=(root) NOPASSWD: /usr/bin/y720-kbled show-ui

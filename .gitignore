@@ -1,0 +1,5 @@
+/target/
+/gen/
+*.deb
+*.pkg.tar*
+*.pkg.tar*.sig
