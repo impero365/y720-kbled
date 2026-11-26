@@ -232,7 +232,10 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
         .default_width(1100)
         .default_height(860)
         .build();
-    window.set_size_request(640, 480);
+    // A quarter tile on this screen is shorter than 480. A taller minimum
+    // makes GTK lay the page out below the tile, so the end of the scroll
+    // never comes into view.
+    window.set_size_request(420, 240);
     window.set_icon_name(Some("y720-kbled"));
 
     let page = gtk::Box::new(Orientation::Vertical, 18);
