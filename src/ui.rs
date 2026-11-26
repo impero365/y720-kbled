@@ -228,7 +228,7 @@ fn install_style() {
 fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -> Panel {
     let window = gtk::ApplicationWindow::builder()
         .application(app)
-        .title("Lenovo y720 keyboard light")
+        .title("Lenovo Y720 keyboard backlight")
         .default_width(1100)
         .default_height(860)
         .build();
@@ -247,7 +247,7 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
 
     let header = gtk::Box::new(Orientation::Vertical, 12);
     let titles = gtk::Box::new(Orientation::Vertical, 2);
-    let title = gtk::Label::new(Some("Lenovo y720 keyboard light"));
+    let title = gtk::Label::new(Some("Lenovo Y720 keyboard backlight"));
     title.add_css_class("title");
     title.set_halign(Align::Start);
     titles.append(&title);
