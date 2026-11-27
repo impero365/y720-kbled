@@ -6,6 +6,8 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
+## [1.1.2] - 2026-11-27
+
 ### Changed
 
 - New app icon: a close-up of the Y720's backlit keys, instead of the frog. It
@@ -91,7 +93,8 @@ First release.
 - The `set` command changes the selected profile from a terminal.
 - Packages for Arch Linux (`makepkg`) and Ubuntu 24.04 (`build-deb.sh`).
 
-[Unreleased]: https://github.com/impero365/lenovo-Y720-keyboard-backlight/compare/v1.1.1...HEAD
+[Unreleased]: https://github.com/impero365/lenovo-Y720-keyboard-backlight/compare/v1.1.2...HEAD
+[1.1.2]: https://github.com/impero365/lenovo-Y720-keyboard-backlight/compare/v1.1.1...v1.1.2
 [1.1.1]: https://github.com/impero365/lenovo-Y720-keyboard-backlight/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/impero365/lenovo-Y720-keyboard-backlight/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/impero365/lenovo-Y720-keyboard-backlight/releases/tag/v1.0.0

@@ -176,7 +176,7 @@ makepkg -si
 ```bash
 sudo apt install build-essential pkg-config libgtk-4-dev
 packaging/build-deb.sh
-sudo apt install ./packaging/y720-kbled_1.1.1-1_amd64.deb
+sudo apt install ./packaging/y720-kbled_1.1.2-1_amd64.deb
 ```
 
 Build it on Ubuntu 24.04 itself. A package built on a newer system may not start on 24.04.
