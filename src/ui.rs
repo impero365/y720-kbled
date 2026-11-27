@@ -247,12 +247,12 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
     window.set_size_request(420, 240);
     window.set_icon_name(Some("y720-kbled"));
 
-    let page = gtk::Box::new(Orientation::Vertical, 10);
+    let page = gtk::Box::new(Orientation::Vertical, 6);
     page.add_css_class("page");
-    page.set_margin_top(10);
-    page.set_margin_bottom(14);
-    page.set_margin_start(14);
-    page.set_margin_end(14);
+    page.set_margin_top(8);
+    page.set_margin_bottom(8);
+    page.set_margin_start(8);
+    page.set_margin_end(8);
 
     let header = gtk::Box::new(Orientation::Horizontal, 8);
     header.add_css_class("header");
@@ -309,7 +309,7 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
     notice.set_visible(false);
 
     // No card around the keyboard: the drawing has its own chassis.
-    let keyboard_card = gtk::Box::new(Orientation::Vertical, 16);
+    let keyboard_card = gtk::Box::new(Orientation::Vertical, 6);
     let keyboard = gtk::DrawingArea::new();
     keyboard.add_css_class("keyboard");
     keyboard.set_hexpand(true);
@@ -369,59 +369,55 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
     // column, and any extra height goes below them.
     keyboard_card.set_valign(Align::Start);
     color_card.set_hexpand(false);
-    let top = gtk::Box::new(Orientation::Horizontal, 10);
+    let top = gtk::Box::new(Orientation::Horizontal, 6);
     top.append(&keyboard_card);
     top.append(&color_card);
 
-    let brightness_card = card();
-    let brightness_heading = gtk::Box::new(Orientation::Horizontal, 8);
+    // Brightness and Effect are one row each under the keyboard: heading on
+    // the left, every choice on a single line beside it.
+    let brightness_card = control_row();
     let (brightness_title, brightness_hint) = section("Brightness", "Left zone");
-    brightness_heading.append(&brightness_title);
-    let apply_brightness = gtk::Button::with_label("Use for all zones");
-    apply_brightness.add_css_class("link");
-    apply_brightness.set_tooltip_text(Some("Apply this brightness to every zone"));
-    apply_brightness.set_hexpand(true);
-    apply_brightness.set_halign(Align::End);
-    apply_brightness.set_valign(Align::Start);
-    brightness_heading.append(&apply_brightness);
-    let brightness_row = choice_flow(4);
+    brightness_title.set_size_request(SECTION_WIDTH, -1);
+    let brightness_row = choice_row();
     let brightness: [gtk::Button; 4] = std::array::from_fn(|index| {
         let button = gtk::Button::new();
         button.add_css_class("choice");
-        let inner = gtk::Box::new(Orientation::Horizontal, 8);
+        let inner = gtk::Box::new(Orientation::Horizontal, 6);
         inner.set_halign(Align::Center);
         inner.append(&level_bars(index));
         inner.append(&gtk::Label::new(Some(BRIGHTNESS[index])));
         button.set_child(Some(&inner));
-        brightness_row.insert(&button, -1);
+        brightness_row.append(&button);
         button
     });
-    brightness_card.append(&brightness_heading);
+    let apply_brightness = gtk::Button::with_label("All zones");
+    apply_brightness.add_css_class("link");
+    apply_brightness.set_tooltip_text(Some("Apply this brightness to every zone"));
+    apply_brightness.set_valign(Align::Center);
+    brightness_card.append(&brightness_title);
     brightness_card.append(&brightness_row);
+    brightness_card.append(&apply_brightness);
 
-    let style_card = card();
-    style_card.append(&section("Effect", "Whole keyboard").0);
-    let mode_row = choice_flow(5);
+    let style_card = control_row();
+    let (style_title, _) = section("Effect", "Whole keyboard");
+    style_title.set_size_request(SECTION_WIDTH, -1);
+    let mode_row = choice_row();
     let modes: [gtk::Button; 5] = std::array::from_fn(|index| {
         let button = gtk::Button::with_label(MODES[index].1);
         button.add_css_class("choice");
-        mode_row.insert(&button, -1);
+        mode_row.append(&button);
         button
     });
+    style_card.append(&style_title);
     style_card.append(&mode_row);
 
-    let split = gtk::Box::new(Orientation::Horizontal, 10);
-    split.set_homogeneous(true);
-    brightness_card.set_hexpand(true);
-    style_card.set_hexpand(true);
-    split.append(&brightness_card);
-    split.append(&style_card);
+    keyboard_card.append(&brightness_card);
+    keyboard_card.append(&style_card);
 
     page.append(&header);
     page.append(&profile_row);
     page.append(&notice);
     page.append(&top);
-    page.append(&split);
 
     let scroll = gtk::ScrolledWindow::builder()
         .hscrollbar_policy(gtk::PolicyType::Never)
@@ -1010,18 +1006,22 @@ fn accent_css(color: u8) -> String {
     )
 }
 
-fn choice_flow(columns: u32) -> gtk::FlowBox {
-    let flow = gtk::FlowBox::new();
-    flow.set_selection_mode(gtk::SelectionMode::None);
-    flow.set_activate_on_single_click(false);
-    flow.set_homogeneous(true);
-    flow.set_column_spacing(8);
-    flow.set_row_spacing(8);
-    flow.set_min_children_per_line(2);
-    flow.set_max_children_per_line(columns);
-    flow.set_hexpand(true);
-    flow.add_css_class("choices");
-    flow
+const SECTION_WIDTH: i32 = 96;
+
+fn control_row() -> gtk::Box {
+    let row = gtk::Box::new(Orientation::Horizontal, 10);
+    row.add_css_class("card");
+    row.add_css_class("control-row");
+    row
+}
+
+/// One line of equal-width choices. It never wraps.
+fn choice_row() -> gtk::Box {
+    let row = gtk::Box::new(Orientation::Horizontal, 4);
+    row.set_homogeneous(true);
+    row.set_hexpand(true);
+    row.set_valign(Align::Center);
+    row
 }
 
 fn set_on(widget: &impl WidgetExt, on: bool) {
@@ -1102,7 +1102,8 @@ fn stylesheet() -> String {
           letter-spacing: 1.2px;
           color: #a9afbd;
         }
-        .eyebrow { margin-right: 4px; }
+        .eyebrow { margin-right: 4px; font-size: 10px; }
+        .toolbar dropdown.profile, .toolbar button.action { font-size: 13px; }
         .section { font-size: 12px; color: #dfe2e9; }
         .hint { color: #727888; font-size: 12px; }
         .card {
@@ -1113,6 +1114,7 @@ fn stylesheet() -> String {
           box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
         }
         .swatch-card { padding: 8px; }
+        .control-row { padding: 6px 8px 6px 12px; border-radius: 14px; }
         .notice {
           background-color: rgba(255, 170, 60, 0.10);
           color: #ffd9a8;
@@ -1196,8 +1198,9 @@ fn stylesheet() -> String {
           background-image: none;
           color: #dfe2e9;
           border: 1px solid rgba(255, 255, 255, 0.08);
-          border-radius: 11px;
-          padding: 9px 10px;
+          border-radius: 9px;
+          padding: 4px 6px;
+          font-size: 13px;
           font-weight: 600;
         }
         button.choice:hover { background: rgba(255, 255, 255, 0.08); background-image: none; }
