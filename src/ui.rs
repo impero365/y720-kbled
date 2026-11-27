@@ -194,7 +194,7 @@ pub fn run() -> Result<(), Error> {
                 match event {
                     UiEvent::Server(message) => apply_server(&panel_for_events, message),
                     UiEvent::Notice(text) => {
-                        // Only the connection thread sends these, and only when it gave up.
+                        // Only the connection thread sends these, while it is disconnected.
                         panel_for_events.set_status(false);
                         panel_for_events.set_notice(&text);
                     }
@@ -288,6 +288,8 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
         .build();
     profiles.set_hexpand(true);
     profiles.add_css_class("profile");
+    // Its own height, not stretched to the tallest button in the bar.
+    profiles.set_valign(Align::Center);
     let add = icon_button("list-add-symbolic", "New", "Copy this profile into a new one");
     let rename = icon_button("document-edit-symbolic", "Rename", "Rename this profile");
     let delete_profile = icon_button("user-trash-symbolic", "Delete", "Delete this profile");
@@ -660,7 +662,8 @@ impl Panel {
     }
 
     fn set_notice(&self, text: &str) {
-        let text = text.trim();
+        let text = sentence_case(text.trim());
+        let text = text.as_str();
         self.notice.set_text(text);
         self.notice.set_visible(!text.is_empty());
     }
@@ -836,33 +839,66 @@ fn ask_name(
     entry.grab_focus();
 }
 
+/// Keeps the window connected to the service. When the service is not
+/// running, or goes away (a package upgrade restarts it), this retries
+/// until it is back. The service's first reply clears the notice.
 fn service_loop(events: Sender<UiEvent>, writer: Arc<Mutex<Option<UnixStream>>>) {
-    let mut client = match connect_service() {
-        Ok(client) => client,
-        Err(error) => {
-            let _ = events.send(UiEvent::Notice(error.to_string()));
-            return;
+    let mut delay = RETRY_FIRST;
+    let mut last_notice = String::new();
+    loop {
+        let reason = match run_session(&events, &writer) {
+            Ok(()) => return,
+            Err(Session::Lost(reason)) => {
+                // It was up, so it is likely restarting: retry soon.
+                delay = RETRY_FIRST;
+                reason
+            }
+            Err(Session::Failed(reason)) => reason,
+        };
+        *writer.lock().unwrap() = None;
+        let notice = format!("{reason}. Reconnecting…");
+        if notice != last_notice {
+            if events.send(UiEvent::Notice(notice.clone())).is_err() {
+                return;
+            }
+            last_notice = notice;
         }
-    };
-    if let Err(error) = client.set_read_timeout(None) {
-        let _ = events.send(UiEvent::Notice(error.to_string()));
-        return;
+        thread::sleep(delay);
+        delay = (delay * 2).min(RETRY_MAX);
     }
-    match client.clone_stream() {
-        Ok(stream) => *writer.lock().unwrap() = Some(stream),
-        Err(error) => {
-            let _ = events.send(UiEvent::Notice(error.to_string()));
-            return;
-        }
-    }
-    if let Err(error) = write_line(&writer, &ClientMsg::Get) {
-        let _ = events.send(UiEvent::Notice(error));
-        return;
-    }
+}
+
+const RETRY_FIRST: Duration = Duration::from_secs(1);
+const RETRY_MAX: Duration = Duration::from_secs(5);
+
+enum Session {
+    /// Could not connect.
+    Failed(String),
+    /// Was connected, then the connection dropped.
+    Lost(String),
+}
+
+/// One connection. Returns `Ok` only when the window is gone.
+fn run_session(
+    events: &Sender<UiEvent>,
+    writer: &Arc<Mutex<Option<UnixStream>>>,
+) -> Result<(), Session> {
+    let failed = |error: String| Session::Failed(error);
+    let mut client = connect_service().map_err(|error| failed(error.to_string()))?;
+    client
+        .set_read_timeout(None)
+        .map_err(|error| failed(error.to_string()))?;
+    let stream = client
+        .clone_stream()
+        .map_err(|error| failed(error.to_string()))?;
+    *writer.lock().unwrap() = Some(stream);
+    write_line(writer, &ClientMsg::Get).map_err(failed)?;
     loop {
         match client.read() {
             Ok(message) => {
-                let _ = events.send(UiEvent::Server(message));
+                if events.send(UiEvent::Server(message)).is_err() {
+                    return Ok(());
+                }
             }
             Err(Error::Io(error))
                 if error.kind() == std::io::ErrorKind::TimedOut
@@ -871,10 +907,7 @@ fn service_loop(events: Sender<UiEvent>, writer: Arc<Mutex<Option<UnixStream>>>)
                 continue;
             }
             Err(_) => {
-                let _ = events.send(UiEvent::Notice(
-                    "lost the backlight service. Restart the window to reconnect.".into(),
-                ));
-                return;
+                return Err(Session::Lost("lost the backlight service".into()));
             }
         }
     }
@@ -1069,6 +1102,16 @@ fn brightness_name(value: u8) -> &'static str {
     BRIGHTNESS[brightness_choice(value)]
 }
 
+/// Errors are lowercase by Rust convention. The window shows them as
+/// sentences.
+fn sentence_case(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
 fn brightness_choice(value: u8) -> usize {
     match value {
         0 => 0,
@@ -1094,6 +1137,7 @@ fn stylesheet() -> String {
         window {
           background-color: #0e0f13;
           color: #eef0f4;
+          font-size: 13px;
         }
         scrolledwindow, viewport { background: transparent; }
         .page {
@@ -1104,12 +1148,12 @@ fn stylesheet() -> String {
                             linear-gradient(180deg, #13151b, #0c0d10);
         }
         .title {
-          font-size: 14px;
+          font-size: 13px;
           font-weight: 800;
           letter-spacing: -0.2px;
         }
         label.status {
-          font-size: 11px;
+          font-size: 10px;
           font-weight: 600;
           color: #ffb4a8;
           background-color: rgba(255, 110, 90, 0.10);
@@ -1129,15 +1173,15 @@ fn stylesheet() -> String {
           padding: 1px 3px 1px 12px;
         }
         .eyebrow, .section {
-          font-size: 11px;
+          font-size: 10px;
           font-weight: 800;
           letter-spacing: 1.2px;
           color: #a9afbd;
         }
-        .eyebrow { margin-right: 4px; font-size: 10px; }
-        .toolbar dropdown.profile, .toolbar button.action { font-size: 13px; }
-        .section { font-size: 12px; color: #dfe2e9; }
-        .hint { color: #727888; font-size: 12px; }
+        .eyebrow { margin-right: 4px; font-size: 9px; }
+        .toolbar dropdown.profile, .toolbar button.action { font-size: 12px; }
+        .section { font-size: 11px; color: #dfe2e9; }
+        .hint { color: #727888; font-size: 11px; }
         .card {
           background-color: rgba(255, 255, 255, 0.035);
           border: 1px solid rgba(255, 255, 255, 0.07);
@@ -1196,13 +1240,12 @@ fn stylesheet() -> String {
           background-image: none;
           border: none;
           padding: 2px 4px;
-          font-size: 12px;
+          font-size: 11px;
           font-weight: 600;
           color: #f4f5f7;
           text-decoration: none;
         }
-        button.link label { text-decoration: none; }
-        button.link:hover label { text-decoration: underline; }
+        button.link label { text-decoration: underline; }
         button.link:hover { background: transparent; background-image: none; }
         dropdown.profile {
           background: rgba(0, 0, 0, 0.25);
@@ -1211,6 +1254,7 @@ fn stylesheet() -> String {
           border: 1px solid rgba(255, 255, 255, 0.09);
           border-radius: 10px;
           padding: 0;
+          min-height: 0;
         }
         dropdown.profile > button {
           background: transparent;
@@ -1218,7 +1262,8 @@ fn stylesheet() -> String {
           color: #eef0f4;
           border: none;
           box-shadow: none;
-          padding: 4px 10px;
+          padding: 3px 10px;
+          min-height: 0;
           font-weight: 600;
         }
         dropdown.profile > button:hover {
@@ -1232,7 +1277,7 @@ fn stylesheet() -> String {
           border: 1px solid rgba(255, 255, 255, 0.08);
           border-radius: 9px;
           padding: 4px 6px;
-          font-size: 13px;
+          font-size: 12px;
           font-weight: 600;
         }
         button.choice:hover { background: rgba(255, 255, 255, 0.08); background-image: none; }
@@ -1293,7 +1338,7 @@ fn stylesheet() -> String {
           background-image: none;
           color: #eef0f4;
           border-radius: 8px;
-          padding: 6px 10px;
+          padding: 3px 10px;
         }
         dropdown.profile popover listview > row:hover,
         popover.menu listview > row:hover,
@@ -1807,6 +1852,11 @@ mod tests {
         assert_eq!(COLORS.len(), 20);
         assert_eq!(BRIGHTNESS.len(), 4);
         assert_eq!(BRIGHTNESS_VALUES, [0, 1, 2, 4]);
+        assert_eq!(
+            sentence_case("lost the backlight service. Reconnecting…"),
+            "Lost the backlight service. Reconnecting…"
+        );
+        assert_eq!(sentence_case(""), "");
         assert_eq!(brightness_name(2), "Medium");
         assert_eq!(brightness_name(3), "Medium");
         assert_eq!(brightness_name(4), "High");
