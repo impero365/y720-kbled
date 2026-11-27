@@ -64,9 +64,13 @@ struct Panel {
     delete_profile: gtk::Button,
     apply_brightness: gtk::Button,
     keyboard: gtk::DrawingArea,
-    zone_caption: gtk::Label,
-    zone_detail: gtk::Label,
+    zone_chips: [gtk::Button; 4],
+    zone_dots: [gtk::Box; 4],
+    zone_details: [gtk::Label; 4],
     hover_zone: std::cell::Cell<Option<usize>>,
+    status: gtk::Label,
+    accent: gtk::CssProvider,
+    color_dot: gtk::Box,
     color_value: gtk::Label,
     swatches: [gtk::Button; 20],
     brightness: [gtk::Button; 4],
@@ -91,7 +95,7 @@ impl ksni::Tray for AppTray {
     }
 
     fn title(&self) -> String {
-        "Y720 Keyboard LEDs".into()
+        "Lenovo Y720 Keyboard Backlight".into()
     }
 
     fn icon_name(&self) -> String {
@@ -186,7 +190,11 @@ pub fn run() -> Result<(), Error> {
             while let Ok(event) = incoming.try_recv() {
                 match event {
                     UiEvent::Server(message) => apply_server(&panel_for_events, message),
-                    UiEvent::Notice(text) => panel_for_events.set_notice(&text),
+                    UiEvent::Notice(text) => {
+                        // Only the connection thread sends these, and only when it gave up.
+                        panel_for_events.set_status(false);
+                        panel_for_events.set_notice(&text);
+                    }
                     UiEvent::Present => present(&panel_for_events.window),
                     UiEvent::Quit => {
                         if let Some(app) = panel_for_events.window.application() {
@@ -228,7 +236,7 @@ fn install_style() {
 fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -> Panel {
     let window = gtk::ApplicationWindow::builder()
         .application(app)
-        .title("Lenovo Y720 keyboard backlight")
+        .title("Lenovo Y720 Keyboard Backlight")
         .default_width(1100)
         .default_height(860)
         .build();
@@ -238,19 +246,37 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
     window.set_size_request(420, 240);
     window.set_icon_name(Some("y720-kbled"));
 
-    let page = gtk::Box::new(Orientation::Vertical, 18);
+    let page = gtk::Box::new(Orientation::Vertical, 16);
     page.add_css_class("page");
-    page.set_margin_top(22);
-    page.set_margin_bottom(26);
-    page.set_margin_start(26);
-    page.set_margin_end(26);
+    page.set_margin_top(20);
+    page.set_margin_bottom(24);
+    page.set_margin_start(24);
+    page.set_margin_end(24);
 
-    let header = gtk::Box::new(Orientation::Vertical, 12);
+    let header = gtk::Box::new(Orientation::Horizontal, 14);
+    header.add_css_class("header");
+    let logo = gtk::Image::from_paintable(Some(&app_logo()));
+    logo.set_pixel_size(44);
+    logo.add_css_class("logo");
     let titles = gtk::Box::new(Orientation::Vertical, 2);
-    let title = gtk::Label::new(Some("Lenovo Y720 keyboard backlight"));
+    titles.set_valign(Align::Center);
+    titles.set_hexpand(true);
+    let title = gtk::Label::new(Some("Lenovo Y720 Keyboard Backlight"));
     title.add_css_class("title");
     title.set_halign(Align::Start);
+    title.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    let subtitle = gtk::Label::new(Some("Four zones · saved by the backlight service"));
+    subtitle.add_css_class("subtitle");
+    subtitle.set_halign(Align::Start);
+    subtitle.set_ellipsize(gtk::pango::EllipsizeMode::End);
     titles.append(&title);
+    titles.append(&subtitle);
+    let status = gtk::Label::new(Some("Connecting"));
+    status.add_css_class("status");
+    status.set_valign(Align::Center);
+    header.append(&logo);
+    header.append(&titles);
+    header.append(&status);
 
     let profile_model = gtk::StringList::new(&[]);
     let expression = gtk::PropertyExpression::new(
@@ -264,108 +290,159 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
         .build();
     profiles.set_hexpand(true);
     profiles.add_css_class("profile");
-    let add = gtk::Button::with_label("Add");
-    let rename = gtk::Button::with_label("Rename");
-    let delete_profile = gtk::Button::with_label("Delete");
-    for button in [&add, &rename, &delete_profile] {
-        button.add_css_class("action");
-    }
+    let add = icon_button("list-add-symbolic", "New", "Copy this profile into a new one");
+    let rename = icon_button("document-edit-symbolic", "Rename", "Rename this profile");
+    let delete_profile = icon_button("user-trash-symbolic", "Delete", "Delete this profile");
+    delete_profile.add_css_class("danger");
     delete_profile.set_sensitive(false);
+    let profile_label = gtk::Label::new(Some("PROFILE"));
+    profile_label.add_css_class("eyebrow");
     let profile_row = gtk::Box::new(Orientation::Horizontal, 8);
+    profile_row.add_css_class("toolbar");
+    profile_row.append(&profile_label);
     profile_row.append(&profiles);
     profile_row.append(&add);
     profile_row.append(&rename);
     profile_row.append(&delete_profile);
-    header.append(&titles);
-    header.append(&profile_row);
 
     let notice = gtk::Label::new(None);
     notice.add_css_class("notice");
-    notice.set_halign(Align::Start);
+    notice.set_halign(Align::Fill);
     notice.set_xalign(0.0);
     notice.set_wrap(true);
     notice.set_visible(false);
 
     let keyboard_card = card();
+    keyboard_card.add_css_class("keyboard-card");
     let keyboard = gtk::DrawingArea::new();
     keyboard.add_css_class("keyboard");
     keyboard.set_hexpand(true);
-    keyboard.set_size_request(-1, 280);
+    keyboard.set_size_request(-1, 200);
     let keyboard_for_size = keyboard.clone();
-    let sized = std::cell::Cell::new(0i32);
+    let sized = Rc::new(std::cell::Cell::new(0i32));
     keyboard.connect_resize(move |_, width, _| {
         if width < 32 {
             return;
         }
         let layout = keyboard_layout();
         let height = ((width as f64) * layout.height / layout.width).round() as i32;
-        let height = height.clamp(200, 380);
+        let height = height.clamp(140, 380);
         if sized.get() != height {
             sized.set(height);
-            keyboard_for_size.set_size_request(-1, height);
+            // A size request made during allocation is dropped. Apply it on
+            // the next idle so a narrower window also gets a shorter board.
+            let keyboard = keyboard_for_size.clone();
+            glib::idle_add_local_once(move || keyboard.set_size_request(-1, height));
         }
     });
-    let zone_caption = gtk::Label::new(Some("Click a key"));
-    zone_caption.add_css_class("zone-name");
-    zone_caption.set_halign(Align::Start);
-    zone_caption.set_hexpand(true);
-    let zone_detail = gtk::Label::new(None);
-    zone_detail.add_css_class("muted");
-    zone_detail.set_halign(Align::End);
-    let caption_row = gtk::Box::new(Orientation::Horizontal, 12);
-    caption_row.append(&zone_caption);
-    caption_row.append(&zone_detail);
+    let zone_row = gtk::Box::new(Orientation::Horizontal, 8);
+    zone_row.set_homogeneous(true);
+    zone_row.add_css_class("zones");
+    let mut zone_dots = Vec::with_capacity(4);
+    let mut zone_details = Vec::with_capacity(4);
+    let zone_chips: [gtk::Button; 4] = std::array::from_fn(|index| {
+        let button = gtk::Button::new();
+        button.add_css_class("zone");
+        let inner = gtk::Box::new(Orientation::Horizontal, 10);
+        let dot = gtk::Box::new(Orientation::Horizontal, 0);
+        dot.add_css_class("dot");
+        dot.set_valign(Align::Center);
+        dot.set_size_request(14, 14);
+        let words = gtk::Box::new(Orientation::Vertical, 0);
+        let name = gtk::Label::new(Some(ZONE_NAMES[index]));
+        name.add_css_class("zone-name");
+        name.set_halign(Align::Start);
+        let detail = gtk::Label::new(None);
+        detail.add_css_class("zone-detail");
+        detail.set_halign(Align::Start);
+        detail.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        words.append(&name);
+        words.append(&detail);
+        inner.append(&dot);
+        inner.append(&words);
+        button.set_child(Some(&inner));
+        zone_row.append(&button);
+        zone_dots.push(dot);
+        zone_details.push(detail);
+        button
+    });
+    let zone_dots: [gtk::Box; 4] = zone_dots.try_into().expect("four zone dots");
+    let zone_details: [gtk::Label; 4] = zone_details.try_into().expect("four zone labels");
     keyboard_card.append(&keyboard);
-    keyboard_card.append(&caption_row);
+    keyboard_card.append(&zone_row);
 
     let color_card = card();
-    let color_heading = gtk::Box::new(Orientation::Horizontal, 12);
-    color_heading.append(&section("Color"));
+    let color_heading = gtk::Box::new(Orientation::Horizontal, 8);
+    color_heading.append(&section("Color", "Selected zone"));
+    let color_dot = gtk::Box::new(Orientation::Horizontal, 0);
+    color_dot.add_css_class("dot");
+    color_dot.set_valign(Align::Center);
+    color_dot.set_size_request(12, 12);
     let color_value = gtk::Label::new(None);
-    color_value.add_css_class("muted");
-    color_value.set_hexpand(true);
+    color_value.add_css_class("value");
     color_value.set_halign(Align::End);
-    color_heading.append(&color_value);
-    let swatch_row = gtk::Grid::new();
-    swatch_row.set_column_spacing(8);
-    swatch_row.set_row_spacing(8);
+    let value_box = gtk::Box::new(Orientation::Horizontal, 8);
+    value_box.set_hexpand(true);
+    value_box.set_halign(Align::End);
+    value_box.set_valign(Align::Start);
+    value_box.append(&color_dot);
+    value_box.append(&color_value);
+    color_heading.append(&value_box);
+    let swatch_row = gtk::FlowBox::new();
+    swatch_row.set_selection_mode(gtk::SelectionMode::None);
+    swatch_row.set_homogeneous(true);
+    swatch_row.set_column_spacing(6);
+    swatch_row.set_row_spacing(6);
+    swatch_row.set_min_children_per_line(5);
+    swatch_row.set_max_children_per_line(10);
     swatch_row.set_halign(Align::Start);
+    swatch_row.add_css_class("choices");
     let swatches: [gtk::Button; 20] = std::array::from_fn(|index| {
         let button = gtk::Button::new();
         button.add_css_class("swatch");
+        button.add_css_class(&format!("s{index}"));
         button.set_tooltip_text(Some(COLORS[index].1));
-        button.set_size_request(40, 40);
-        button.set_hexpand(false);
-        button.set_vexpand(false);
+        button.set_halign(Align::Center);
+        button.set_valign(Align::Center);
         let chip = gtk::Box::new(Orientation::Horizontal, 0);
         chip.add_css_class("chip");
         chip.add_css_class(&format!("c{index}"));
-        chip.set_size_request(28, 28);
+        chip.set_size_request(32, 32);
         button.set_child(Some(&chip));
-        swatch_row.attach(&button, (index % 10) as i32, (index / 10) as i32, 1, 1);
+        swatch_row.insert(&button, -1);
         button
     });
     color_card.append(&color_heading);
     color_card.append(&swatch_row);
 
     let brightness_card = card();
-    brightness_card.append(&section("Brightness"));
+    let brightness_heading = gtk::Box::new(Orientation::Horizontal, 8);
+    brightness_heading.append(&section("Brightness", "Selected zone"));
+    let apply_brightness = gtk::Button::with_label("Use for all zones");
+    apply_brightness.add_css_class("link");
+    apply_brightness.set_tooltip_text(Some("Apply this brightness to every zone"));
+    apply_brightness.set_hexpand(true);
+    apply_brightness.set_halign(Align::End);
+    apply_brightness.set_valign(Align::Start);
+    brightness_heading.append(&apply_brightness);
     let brightness_row = choice_flow(4);
     let brightness: [gtk::Button; 4] = std::array::from_fn(|index| {
-        let button = gtk::Button::with_label(BRIGHTNESS[index]);
+        let button = gtk::Button::new();
         button.add_css_class("choice");
+        let inner = gtk::Box::new(Orientation::Horizontal, 8);
+        inner.set_halign(Align::Center);
+        inner.append(&level_bars(index));
+        inner.append(&gtk::Label::new(Some(BRIGHTNESS[index])));
+        button.set_child(Some(&inner));
         brightness_row.insert(&button, -1);
         button
     });
-    let apply_brightness = gtk::Button::with_label("Apply this brightness to every zone");
-    apply_brightness.add_css_class("action");
-    apply_brightness.set_hexpand(true);
+    brightness_card.append(&brightness_heading);
     brightness_card.append(&brightness_row);
-    brightness_card.append(&apply_brightness);
 
     let style_card = card();
-    style_card.append(&section("Style"));
-    let mode_row = choice_flow(3);
+    style_card.append(&section("Effect", "Whole keyboard"));
+    let mode_row = choice_flow(5);
     let modes: [gtk::Button; 5] = std::array::from_fn(|index| {
         let button = gtk::Button::with_label(MODES[index].1);
         button.add_css_class("choice");
@@ -382,6 +459,7 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
     split.append(&style_card);
 
     page.append(&header);
+    page.append(&profile_row);
     page.append(&notice);
     page.append(&keyboard_card);
     page.append(&color_card);
@@ -393,6 +471,15 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
         .child(&page)
         .build();
     window.set_child(Some(&scroll));
+
+    let accent = gtk::CssProvider::new();
+    if let Some(display) = gtk::gdk::Display::default() {
+        gtk::style_context_add_provider_for_display(
+            &display,
+            &accent,
+            gtk::STYLE_PROVIDER_PRIORITY_USER + 1,
+        );
+    }
 
     let panel = Panel {
         config: std::cell::RefCell::new(None),
@@ -408,9 +495,13 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
         delete_profile,
         apply_brightness,
         keyboard,
-        zone_caption,
-        zone_detail,
+        zone_chips,
+        zone_dots,
+        zone_details,
         hover_zone: std::cell::Cell::new(None),
+        status,
+        accent,
+        color_dot,
         color_value,
         swatches,
         brightness,
@@ -477,6 +568,14 @@ fn wire_controls(panel: &Rc<Panel>) {
         }
     });
     panel.keyboard.add_controller(motion);
+
+    for (index, button) in panel.zone_chips.iter().enumerate() {
+        let ui = Rc::clone(panel);
+        button.connect_clicked(move |_| {
+            ui.selected_zone.set(index);
+            ui.render();
+        });
+    }
 
     for (index, button) in panel.swatches.iter().enumerate() {
         let ui = Rc::clone(panel);
@@ -583,6 +682,12 @@ fn wire_controls(panel: &Rc<Panel>) {
 }
 
 impl Panel {
+    fn set_status(&self, connected: bool) {
+        self.status
+            .set_text(if connected { "● Service running" } else { "● Not connected" });
+        set_on(&self.status, connected);
+    }
+
     fn set_notice(&self, text: &str) {
         let text = text.trim();
         self.notice.set_text(text);
@@ -610,23 +715,29 @@ impl Panel {
         self.delete_profile
             .set_sensitive(config.profiles.len() >= 2);
 
-        let zone = profile.zones[zone_index];
-        let color_name = COLORS
-            .get(zone.color as usize)
-            .map(|(_, name)| *name)
-            .unwrap_or("Color");
-        let brightness = brightness_name(zone.brightness);
-        self.zone_caption
-            .set_text(ZONE_NAMES.get(zone_index).copied().unwrap_or("Zone"));
-        self.zone_detail
-            .set_text(&format!("{color_name} · {brightness}"));
+        for (index, zone) in profile.zones.iter().enumerate().take(4) {
+            let name = COLORS
+                .get(zone.color as usize)
+                .map(|(_, name)| *name)
+                .unwrap_or("Color");
+            self.zone_details[index]
+                .set_text(&format!("{name} · {}", brightness_name(zone.brightness)));
+            set_color_class(&self.zone_dots[index], zone.color);
+            set_on(&self.zone_dots[index], zone.brightness > 0 && zone.color != 19);
+            set_on(&self.zone_chips[index], index == zone_index);
+        }
         self.keyboard.queue_draw();
 
+        let zone = profile.zones[zone_index];
         let (hex, color_name) = COLORS
-            .get(profile.zones[zone_index].color as usize)
+            .get(zone.color as usize)
             .copied()
             .unwrap_or(("", ""));
-        self.color_value.set_text(&format!("{color_name}  {hex}"));
+        self.color_value
+            .set_text(&format!("{color_name}  {}", hex.to_uppercase()));
+        set_color_class(&self.color_dot, zone.color);
+        set_on(&self.color_dot, zone.color != 19);
+        self.accent.load_from_string(&accent_css(zone.color));
         for (index, button) in self.swatches.iter().enumerate() {
             set_on(button, index == profile.zones[zone_index].color as usize);
         }
@@ -680,6 +791,7 @@ impl Panel {
 fn apply_server(panel: &Panel, message: ServerMsg) {
     match message {
         ServerMsg::Config { config, notice } => {
+            panel.set_status(true);
             *panel.config.borrow_mut() = Some(config);
             panel.set_notice(&notice);
             panel.render();
@@ -692,7 +804,10 @@ fn apply_server(panel: &Panel, message: ServerMsg) {
             panel.set_notice(&message);
         }
         ServerMsg::Show => present(&panel.window),
-        ServerMsg::Stopped => panel.set_notice("the backlight service stopped."),
+        ServerMsg::Stopped => {
+            panel.set_status(false);
+            panel.set_notice("the backlight service stopped.");
+        }
     }
 }
 
@@ -863,27 +978,89 @@ fn tray_icon() -> Vec<ksni::Icon> {
 }
 
 fn card() -> gtk::Box {
-    let card = gtk::Box::new(Orientation::Vertical, 12);
+    let card = gtk::Box::new(Orientation::Vertical, 14);
     card.add_css_class("card");
     card
 }
 
-fn section(text: &str) -> gtk::Label {
-    let label = gtk::Label::new(Some(text));
+fn section(text: &str, hint: &str) -> gtk::Box {
+    let column = gtk::Box::new(Orientation::Vertical, 2);
+    let label = gtk::Label::new(Some(&text.to_uppercase()));
     label.add_css_class("section");
     label.set_halign(Align::Start);
-    label
+    let hint = gtk::Label::new(Some(hint));
+    hint.add_css_class("hint");
+    hint.set_halign(Align::Start);
+    column.append(&label);
+    column.append(&hint);
+    column
+}
+
+fn icon_button(icon: &str, text: &str, tooltip: &str) -> gtk::Button {
+    let button = gtk::Button::new();
+    button.add_css_class("action");
+    button.set_tooltip_text(Some(tooltip));
+    let inner = gtk::Box::new(Orientation::Horizontal, 6);
+    inner.append(&gtk::Image::from_icon_name(icon));
+    inner.append(&gtk::Label::new(Some(text)));
+    button.set_child(Some(&inner));
+    button
+}
+
+/// Four little bars, `level` of them lit, beside each brightness label.
+fn level_bars(level: usize) -> gtk::Box {
+    let bars = gtk::Box::new(Orientation::Horizontal, 2);
+    bars.set_valign(Align::Center);
+    bars.add_css_class("bars");
+    for step in 0..3 {
+        let bar = gtk::Box::new(Orientation::Horizontal, 0);
+        bar.add_css_class("bar");
+        bar.set_size_request(3, 6 + 3 * step as i32);
+        bar.set_valign(Align::End);
+        set_on(&bar, step < level);
+        bars.append(&bar);
+    }
+    bars
+}
+
+fn app_logo() -> gtk::gdk::Texture {
+    let bytes = glib::Bytes::from_static(include_bytes!("../assets/icon.png"));
+    gtk::gdk::Texture::from_bytes(&bytes).expect("the bundled icon is a PNG")
+}
+
+fn set_color_class(widget: &impl WidgetExt, color: u8) {
+    for index in 0..COLORS.len() {
+        widget.remove_css_class(&format!("c{index}"));
+    }
+    widget.add_css_class(&format!("c{color}"));
+}
+
+/// Tints the selected buttons with the color of the zone being edited.
+fn accent_css(color: u8) -> String {
+    let hex = match color {
+        // Black would vanish on this background. White reads as "no tint".
+        19 => "#f4f5f7",
+        index => COLORS.get(index as usize).map(|(hex, _)| *hex).unwrap_or("#f4f5f7"),
+    };
+    format!(
+        "button.choice.on, button.zone.on {{ \
+           background-color: alpha({hex}, 0.16); \
+           border-color: alpha({hex}, 0.85); \
+           box-shadow: 0 0 14px alpha({hex}, 0.22); }}\n\
+         button.choice.on box.bar.on {{ background-color: {hex}; }}\n\
+         button.link {{ color: mix({hex}, #f4f5f7, 0.35); }}\n"
+    )
 }
 
 fn choice_flow(columns: u32) -> gtk::FlowBox {
     let flow = gtk::FlowBox::new();
     flow.set_selection_mode(gtk::SelectionMode::None);
     flow.set_activate_on_single_click(false);
+    flow.set_homogeneous(true);
     flow.set_column_spacing(8);
     flow.set_row_spacing(8);
     flow.set_min_children_per_line(2);
     flow.set_max_children_per_line(columns);
-    flow.set_halign(Align::Start);
     flow.set_hexpand(true);
     flow.add_css_class("choices");
     flow
@@ -923,139 +1100,228 @@ fn visible_brightness(value: u8) -> u8 {
 fn stylesheet() -> String {
     let mut css = String::from(
         r#"
-        window, .page {
-          background-color: #101114;
-          color: #f4f5f7;
+        window {
+          background-color: #0e0f13;
+          color: #eef0f4;
         }
-        .page { background-color: #101114; }
+        scrolledwindow, viewport { background: transparent; }
+        .page {
+          background: transparent;
+        }
+        window.background {
+          background-image: radial-gradient(circle at 15% 0%, rgba(120, 130, 255, 0.07), transparent 45%),
+                            linear-gradient(180deg, #13151b, #0c0d10);
+        }
+        image.logo { -gtk-icon-size: 44px; }
         .title {
-          font-size: 22px;
-          font-weight: 700;
+          font-size: 21px;
+          font-weight: 800;
+          letter-spacing: -0.2px;
         }
-        .section {
-          font-size: 15px;
-          font-weight: 700;
+        .subtitle { color: #8a90a0; font-size: 13px; }
+        label.status {
+          font-size: 12px;
+          font-weight: 600;
+          color: #ffb4a8;
+          background-color: rgba(255, 110, 90, 0.10);
+          border: 1px solid rgba(255, 110, 90, 0.30);
+          border-radius: 999px;
+          padding: 5px 12px;
         }
-        .muted { color: #9aa0ad; font-size: 13px; }
-        .zone-name { color: #f4f5f7; font-size: 15px; font-weight: 700; }
+        label.status.on {
+          color: #9ff0c0;
+          background-color: rgba(70, 220, 140, 0.10);
+          border-color: rgba(70, 220, 140, 0.30);
+        }
+        .toolbar {
+          background-color: rgba(255, 255, 255, 0.03);
+          border: 1px solid rgba(255, 255, 255, 0.07);
+          border-radius: 14px;
+          padding: 6px 6px 6px 14px;
+        }
+        .eyebrow, .section {
+          font-size: 11px;
+          font-weight: 800;
+          letter-spacing: 1.2px;
+          color: #a9afbd;
+        }
+        .eyebrow { margin-right: 4px; }
+        .section { font-size: 12px; color: #dfe2e9; }
+        .hint { color: #727888; font-size: 12px; }
+        .value { color: #cfd3dc; font-size: 13px; font-family: monospace; }
         .card {
-          background-color: #171922;
-          border: 1px solid #2c2f3a;
-          border-radius: 16px;
-          padding: 16px;
+          background-color: rgba(255, 255, 255, 0.035);
+          border: 1px solid rgba(255, 255, 255, 0.07);
+          border-radius: 18px;
+          padding: 18px;
+          box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
         }
+        .keyboard-card { padding: 14px 14px 14px 14px; }
         .notice {
-          background-color: #3a2428;
-          color: #ffd5d8;
-          border: 1px solid #6e3038;
+          background-color: rgba(255, 170, 60, 0.10);
+          color: #ffd9a8;
+          border: 1px solid rgba(255, 170, 60, 0.35);
           border-radius: 12px;
-          padding: 10px 12px;
+          padding: 10px 14px;
         }
-        button.action, button.primary, button.choice, button.swatch {
+        button.action, button.primary, button.choice, button.swatch,
+        button.zone, button.link {
           min-height: 0;
+          min-width: 0;
+          box-shadow: none;
+          transition: background-color 120ms ease, border-color 120ms ease,
+                      box-shadow 160ms ease;
         }
         button.action {
-          background: #22252e;
+          background: transparent;
           background-image: none;
-          color: #f4f5f7;
-          border: 1px solid #3a3d48;
+          color: #dfe2e9;
+          border: 1px solid transparent;
           border-radius: 10px;
-          padding: 8px 14px;
+          padding: 7px 12px;
         }
-        button.action:hover { background: #2c3040; background-image: none; }
-        button.action:disabled { opacity: 0.4; }
+        button.action:hover {
+          background: rgba(255, 255, 255, 0.07);
+          background-image: none;
+          border-color: rgba(255, 255, 255, 0.08);
+        }
+        button.action.danger:hover {
+          background: rgba(255, 90, 90, 0.14);
+          color: #ffb3b3;
+          border-color: rgba(255, 90, 90, 0.35);
+        }
+        button.action:disabled { opacity: 0.35; }
         button.primary {
-          background: #f4f5f7;
+          background: #eef0f4;
           background-image: none;
           color: #14151a;
-          border: 1px solid #f4f5f7;
+          border: 1px solid #eef0f4;
           border-radius: 10px;
-          padding: 8px 16px;
+          padding: 8px 18px;
           font-weight: 700;
         }
         button.primary:hover { background: #ffffff; background-image: none; }
-        dropdown.profile {
-          background: #171922;
+        button.link {
+          background: transparent;
           background-image: none;
-          color: #f4f5f7;
-          border: 1px solid #3a3d48;
+          border: none;
+          padding: 2px 4px;
+          font-size: 12px;
+          font-weight: 600;
+          color: #c7cbd6;
+          text-decoration: none;
+        }
+        button.link label { text-decoration: none; }
+        button.link:hover label { text-decoration: underline; }
+        button.link:hover { background: transparent; background-image: none; }
+        dropdown.profile {
+          background: rgba(0, 0, 0, 0.25);
+          background-image: none;
+          color: #eef0f4;
+          border: 1px solid rgba(255, 255, 255, 0.09);
           border-radius: 10px;
-          padding: 2px;
+          padding: 0;
         }
         dropdown.profile > button {
           background: transparent;
           background-image: none;
-          color: #f4f5f7;
+          color: #eef0f4;
           border: none;
           box-shadow: none;
+          padding: 7px 12px;
+          font-weight: 600;
         }
-        button.choice {
-          background: #22252e;
+        dropdown.profile > button:hover {
+          background: rgba(255, 255, 255, 0.05);
           background-image: none;
-          color: #f4f5f7;
-          border: 1px solid #343846;
+        }
+        button.zone {
+          background: rgba(255, 255, 255, 0.03);
+          background-image: none;
+          color: #eef0f4;
+          border: 1px solid rgba(255, 255, 255, 0.07);
+          border-radius: 12px;
+          padding: 8px 12px;
+        }
+        button.zone:hover { background: rgba(255, 255, 255, 0.07); background-image: none; }
+        .zone-name { font-size: 13px; font-weight: 700; }
+        .zone-detail { font-size: 11px; color: #8a90a0; }
+        box.dot {
           border-radius: 999px;
-          padding: 8px 14px;
+          min-width: 12px;
+          min-height: 12px;
+          opacity: 0.35;
+          border: 1px solid rgba(255, 255, 255, 0.25);
         }
-        button.choice:hover { background: #2c3040; background-image: none; }
-        button.choice.on {
-          background: #f4f5f7;
+        box.dot.on { opacity: 1; }
+        button.choice {
+          background: rgba(255, 255, 255, 0.04);
           background-image: none;
-          color: #14151a;
-          border-color: #f4f5f7;
+          color: #dfe2e9;
+          border: 1px solid rgba(255, 255, 255, 0.08);
+          border-radius: 11px;
+          padding: 9px 10px;
+          font-weight: 600;
         }
-        button.choice.on label { color: #14151a; }
+        button.choice:hover { background: rgba(255, 255, 255, 0.08); background-image: none; }
+        button.choice.on { color: #ffffff; }
+        box.bar {
+          background-color: rgba(255, 255, 255, 0.18);
+          border-radius: 2px;
+          min-width: 3px;
+        }
+        box.bar.on { background-color: #eef0f4; }
         button.swatch {
           padding: 3px;
-          border-radius: 12px;
-          background: #171922;
+          border-radius: 999px;
+          background: transparent;
           background-image: none;
-          border: 2px solid rgba(255, 255, 255, 0.22);
-          min-width: 40px;
-          min-height: 40px;
+          border: 2px solid transparent;
         }
+        button.swatch:hover { border-color: rgba(255, 255, 255, 0.30); background: transparent; }
         button.swatch.on { border-color: #ffffff; }
-        box.chip { border-radius: 9px; }
+        box.chip {
+          border-radius: 999px;
+          box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.10);
+        }
         flowbox.choices > flowboxchild {
           padding: 0;
           background: transparent;
           border: none;
+          outline: none;
         }
         entry {
-          background-color: #12141a;
-          color: #f4f5f7;
-          border: 1px solid #3a3d48;
+          background-color: rgba(0, 0, 0, 0.3);
+          color: #eef0f4;
+          border: 1px solid rgba(255, 255, 255, 0.12);
           border-radius: 10px;
           padding: 8px 10px;
           min-height: 0;
         }
-        window.name-dialog { background-color: #1b1d24; }
+        entry:focus-within { border-color: rgba(255, 255, 255, 0.35); }
+        window.name-dialog { background-color: #17191f; background-image: none; }
         popover, popover contents {
           background-color: #1b1d24;
-          color: #f4f5f7;
-        }
-        dropdown.profile > button:hover {
-          background: #2a2e3c;
-          background-image: none;
+          color: #eef0f4;
         }
         dropdown.profile popover listview,
         popover.menu listview {
           background-color: #1b1d24;
           background-image: none;
-          color: #f4f5f7;
+          color: #eef0f4;
         }
         dropdown.profile popover listview > row,
         popover.menu listview > row {
           background-color: #1b1d24;
           background-image: none;
-          color: #f4f5f7;
+          color: #eef0f4;
           border-radius: 8px;
           padding: 6px 10px;
         }
         dropdown.profile popover listview > row:hover,
         popover.menu listview > row:hover,
         popover.menu listview > row.activatable:hover {
-          background-color: #5c657e;
+          background-color: #2c3140;
           background-image: none;
           color: #ffffff;
         }
@@ -1065,8 +1331,8 @@ fn stylesheet() -> String {
         popover.menu listview > row:selected:hover,
         popover.menu listview > row.activatable:selected,
         popover.menu listview > row.activatable:selected:hover {
-          background: #f4f5f7;
-          background-color: #f4f5f7;
+          background: #eef0f4;
+          background-color: #eef0f4;
           background-image: none;
           color: #14151a;
         }
@@ -1077,7 +1343,8 @@ fn stylesheet() -> String {
     );
     for (index, (hex, _)) in COLORS.iter().enumerate() {
         css.push_str(&format!(
-            "box.chip.c{index} {{ background: {hex}; background-image: none; }}\n"
+            "box.chip.c{index}, box.dot.c{index} {{ background: {hex}; background-image: none; }}\n\
+             button.swatch.s{index}.on {{ box-shadow: 0 0 14px alpha({hex}, 0.55); }}\n"
         ));
     }
     css
@@ -1322,10 +1589,36 @@ fn draw_keyboard(panel: &Panel, cr: &gtk::cairo::Context, width: i32, height: i3
     cr.translate(ox, oy);
     cr.scale(scale, scale);
 
+    // Chassis: a dark aluminium slab with a faint top highlight.
     rounded_rect(cr, 1.0, 1.0, layout.width - 2.0, layout.height - 2.0, 18.0);
-    cr.set_source_rgba(0.07, 0.08, 0.10, 1.0);
+    let body = gtk::cairo::LinearGradient::new(0.0, 0.0, 0.0, layout.height);
+    body.add_color_stop_rgba(0.0, 0.10, 0.11, 0.14, 1.0);
+    body.add_color_stop_rgba(1.0, 0.05, 0.055, 0.07, 1.0);
+    let _ = cr.set_source(&body);
     let _ = cr.fill_preserve();
-    cr.set_source_rgba(0.20, 0.22, 0.27, 1.0);
+    let _ = cr.save();
+    cr.clip_preserve();
+    // Light that leaks out from under each zone's keys.
+    for (zone, paint) in paints.iter().enumerate() {
+        if paint.black || paint.brightness == 0 {
+            continue;
+        }
+        let Some((x0, y0, x1, y1)) = zone_bounds(layout, zone) else {
+            continue;
+        };
+        let (r, g, b) = paint.rgb;
+        let level = f64::from(paint.brightness) / 4.0;
+        let cx = (x0 + x1) / 2.0;
+        let cy = (y0 + y1) / 2.0;
+        let radius = (x1 - x0).max(y1 - y0) * 0.75;
+        let glow = gtk::cairo::RadialGradient::new(cx, cy, 0.0, cx, cy, radius);
+        glow.add_color_stop_rgba(0.0, r, g, b, 0.16 + 0.14 * level);
+        glow.add_color_stop_rgba(1.0, r, g, b, 0.0);
+        let _ = cr.set_source(&glow);
+        let _ = cr.paint();
+    }
+    let _ = cr.restore();
+    cr.set_source_rgba(1.0, 1.0, 1.0, 0.08);
     cr.set_line_width(1.0);
     let _ = cr.stroke();
 
@@ -1334,7 +1627,7 @@ fn draw_keyboard(panel: &Panel, cr: &gtk::cairo::Context, width: i32, height: i3
         if paint.black || paint.brightness == 0 {
             continue;
         }
-        let emphasis = if hover == Some(key.zone as usize) { 0.72 } else { 0.5 };
+        let emphasis = if hover == Some(key.zone as usize) { 0.9 } else { 0.5 };
         draw_glow(cr, key, paint, emphasis);
     }
     for key in &layout.keys {
@@ -1348,6 +1641,22 @@ fn draw_keyboard(panel: &Panel, cr: &gtk::cairo::Context, width: i32, height: i3
         );
     }
     let _ = cr.restore();
+}
+
+fn zone_bounds(layout: &KeyboardLayout, zone: usize) -> Option<(f64, f64, f64, f64)> {
+    layout
+        .keys
+        .iter()
+        .filter(|key| key.zone as usize == zone)
+        .fold(None, |bounds, key| {
+            let (x0, y0, x1, y1) = bounds.unwrap_or((f64::MAX, f64::MAX, f64::MIN, f64::MIN));
+            Some((
+                x0.min(key.x),
+                y0.min(key.y),
+                x1.max(key.x + key.w),
+                y1.max(key.y + key.h),
+            ))
+        })
 }
 
 fn draw_glow(cr: &gtk::cairo::Context, key: &KeyGeom, paint: &ZonePaint, emphasis: f64) {
@@ -1381,17 +1690,24 @@ fn draw_key(
     } else {
         paint.rgb
     };
-    let tint = if paint.black {
+    let base_tint = if paint.black {
         0.0
-    } else if hover {
-        0.18
     } else if paint.brightness == 0 {
         0.05
     } else {
         0.12 + 0.08 * f64::from(paint.brightness) / 5.0
     };
-    let top = mix_rgb((0.17, 0.18, 0.22), paint.rgb, tint);
-    let bottom = mix_rgb((0.09, 0.10, 0.12), paint.rgb, tint * 0.55);
+    let tint = if hover && !paint.black {
+        base_tint + 0.16
+    } else {
+        base_tint
+    };
+    let mut top = mix_rgb((0.17, 0.18, 0.22), paint.rgb, tint);
+    let mut bottom = mix_rgb((0.09, 0.10, 0.12), paint.rgb, tint * 0.55);
+    if hover {
+        top = mix_rgb(top, (1.0, 1.0, 1.0), 0.06);
+        bottom = mix_rgb(bottom, (1.0, 1.0, 1.0), 0.04);
+    }
 
     rounded_rect(cr, key.x, key.y, key.w, key.h, 5.5);
     let gradient = gtk::cairo::LinearGradient::new(key.x, key.y, key.x, key.y + key.h);
@@ -1400,10 +1716,23 @@ fn draw_key(
     let _ = cr.set_source(&gradient);
     let _ = cr.fill_preserve();
 
-    let edge_alpha = if paint.brightness == 0 { 0.38 } else { 0.82 };
+    let edge_alpha = match (hover, paint.brightness == 0) {
+        (true, true) => 0.6,
+        (true, false) => 1.0,
+        (false, true) => 0.38,
+        (false, false) => 0.82,
+    };
     cr.set_line_width(2.6);
     cr.set_source_rgba(r, g, b, edge_alpha);
     let _ = cr.stroke();
+
+    // A thin sheen along the top of the cap.
+    let sheen = gtk::cairo::LinearGradient::new(key.x, key.y, key.x, key.y + key.h * 0.45);
+    sheen.add_color_stop_rgba(0.0, 1.0, 1.0, 1.0, if hover { 0.10 } else { 0.06 });
+    sheen.add_color_stop_rgba(1.0, 1.0, 1.0, 1.0, 0.0);
+    rounded_rect(cr, key.x + 2.0, key.y + 2.0, key.w - 4.0, key.h * 0.45, 4.0);
+    let _ = cr.set_source(&sheen);
+    let _ = cr.fill();
 
     if selected {
         let inset = 7.5;
