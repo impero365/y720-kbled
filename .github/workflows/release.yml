@@ -26,7 +26,7 @@ jobs:
   check:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
       - name: Tag matches the version in every file
@@ -42,7 +42,7 @@ jobs:
     needs: check
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
       - name: Install build dependencies
@@ -51,7 +51,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends libgtk-4-dev pkg-config
       - run: cargo test --locked
       - run: bash packaging/build-deb.sh
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: deb
           path: packaging/*.deb
@@ -64,7 +64,7 @@ jobs:
     steps:
       - name: Install build dependencies
         run: pacman -Syu --noconfirm --needed git gtk4 rust
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
       - name: makepkg
@@ -74,7 +74,7 @@ jobs:
           useradd -m builder
           chown -R builder: "$GITHUB_WORKSPACE"
           su builder -c 'cargo fetch --locked && cd packaging && makepkg --noconfirm'
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: arch
           path: packaging/*.pkg.tar.zst
@@ -86,10 +86,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.repository.default_branch }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
