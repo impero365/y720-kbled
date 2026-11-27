@@ -1,9 +1,11 @@
 # Lenovo Legion Y720 keyboard backlight and its Fn+Space / numpad-7 keys.
-# The hidraw node is the I2C device 048d:837a. The hotkey node is the USB
+# The hidraw node is the I2C device 048d:837a. Its parent HID device is named
+# <bus>:048D:837A.<n> (e.g. 0018:048D:837A.0006) and has no id/vendor or
+# id/product attributes, so match the name. The hotkey node is the USB
 # keyboard named below, not the sibling "Wireless Radio Control" interface
 # and not the AT keyboard.
 #
 # Group y720 contains only the system service account. People are not members.
 
-KERNEL=="hidraw*", ATTRS{id/vendor}=="048d", ATTRS{id/product}=="837a", GROUP="y720", MODE="0660"
+KERNEL=="hidraw*", SUBSYSTEMS=="hid", KERNELS=="*:048D:837A.*", GROUP="y720", MODE="0660"
 KERNEL=="event*", ATTRS{name}=="ITE Tech. Inc. ITE Device(8910) Keyboard", GROUP="y720", MODE="0660"

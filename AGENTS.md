@@ -16,7 +16,7 @@ One system service owns the keyboard. The window and the `set` command talk to i
 
 Lenovo Y720-15IKB. Keep the ITE33D1 reports: four 6-byte feature reports `[0xCC, 0, mode, color, brightness, zone]` and a commit `[0xCC, 9]`. Open hidraw read-write, close the fd, and surface ioctl errors.
 
-- Backlight: hidraw whose parent is `048d:837a`. Match `ATTRS{id/vendor}` and `ATTRS{id/product}`. There is no sysfs `name` equal to `ITE33D1:00 048D:837A`.
+- Backlight: hidraw whose parent is `048d:837a`. In udev, match the parent HID device by name: `SUBSYSTEMS=="hid", KERNELS=="*:048D:837A.*"` (it is `0018:048D:837A.0006` here). That device has no `id/vendor` or `id/product` attributes, so `ATTRS{id/vendor}` never matches. There is no sysfs `name` equal to `ITE33D1:00 048D:837A`; the program finds it by `HID_NAME` in `uevent`.
 - Hotkeys: input node named exactly `ITE Tech. Inc. ITE Device(8910) Keyboard`. Do not use the sibling `Wireless Radio Control` node (`048d:c100` as well) or the AT keyboard. Scan codes: Fn+Space `786512`, numpad 7 `786515`.
 - Zones are left to right, then the numpad, indexes 0–3. Modes: heartbeat 0, breath 1, smooth 2, always_on 3, wave 4. Colors 0–19. The brightness byte is still 0–5. On this keyboard 2 and 3 are the same intensity, and 4 and 5 are the same intensity. The window offers Off, Low, Medium, and High, and writes 0, 1, 2, and 4. Keep accepting 3 and 5 in saved profiles and in `set`.
 - Do not load a kernel module. Leave extreme cooling out.

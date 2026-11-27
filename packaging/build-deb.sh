@@ -4,7 +4,7 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-version=1.1.0
+version=1.1.1
 # Raised on every build, like pkgrel in the PKGBUILD. Back to 1 on a new version.
 release=1
 stage=$(mktemp -d)

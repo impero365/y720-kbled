@@ -6,6 +6,21 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
+## [1.1.1] - 2026-11-27
+
+### Changed
+
+- The packages on the Releases page now have the same file name in every
+  release: `y720-kbled_amd64.deb` and `y720-kbled-x86_64.pkg.tar.zst`. The
+  download commands in the README always fetch the newest release, so you can
+  run the same commands again to upgrade.
+
+### Fixed
+
+- The keyboard backlight now changes color after installing the package. The
+  service could not open the backlight device because the device permission
+  rule never matched it, and its log showed "permission denied".
+
 ## [1.1.0] - 2026-11-27
 
 ### Added
@@ -71,6 +86,7 @@ First release.
 - The `set` command changes the selected profile from a terminal.
 - Packages for Arch Linux (`makepkg`) and Ubuntu 24.04 (`build-deb.sh`).
 
-[Unreleased]: https://github.com/impero365/lenovo-Y720-keyboard-backlight/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/impero365/lenovo-Y720-keyboard-backlight/compare/v1.1.1...HEAD
+[1.1.1]: https://github.com/impero365/lenovo-Y720-keyboard-backlight/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/impero365/lenovo-Y720-keyboard-backlight/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/impero365/lenovo-Y720-keyboard-backlight/releases/tag/v1.0.0

@@ -93,6 +93,21 @@ jobs:
         with:
           path: dist
           merge-multiple: true
+      - name: Give the packages fixed names
+        # The names carry no version, so
+        # releases/latest/download/<name> always points to the newest package.
+        # apt and pacman read the version from inside the package.
+        run: |
+          shopt -s nullglob
+          debs=(dist/*.deb)
+          pkgs=(dist/*.pkg.tar.zst)
+          [ "${#debs[@]}" -eq 1 ] && [ "${#pkgs[@]}" -eq 1 ] || {
+            echo "expected one .deb and one .pkg.tar.zst, got: ${debs[*]} ${pkgs[*]}" >&2
+            exit 1
+          }
+          mv "${debs[0]}" dist/y720-kbled_amd64.deb
+          mv "${pkgs[0]}" dist/y720-kbled-x86_64.pkg.tar.zst
+          ls -l dist
       - name: Checksums and release notes
         run: |
           (cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS)

@@ -33,22 +33,22 @@ Download the package for your system from the [latest release](https://github.co
 ### Arch Linux
 
 ```bash
-curl -LO https://github.com/impero365/lenovo-Y720-keyboard-backlight/releases/download/v1.1.0/y720-kbled-1.1.0-1-x86_64.pkg.tar.zst
-sudo pacman -U y720-kbled-1.1.0-1-x86_64.pkg.tar.zst
+curl -LO https://github.com/impero365/lenovo-Y720-keyboard-backlight/releases/latest/download/y720-kbled-x86_64.pkg.tar.zst
+sudo pacman -U y720-kbled-x86_64.pkg.tar.zst
 ```
 
 That's it. The lights come on with your saved colors from now on, every time the laptop boots.
 
-To upgrade, download the newer package and install it the same way, over the old one. You don't need to uninstall first. In fact, don't: uninstalling deletes your saved profiles.
+To upgrade, run the same two commands again: the link always points to the newest release, and the package installs over the old one. You don't need to uninstall first. In fact, don't: uninstalling deletes your saved profiles.
 
 ### Ubuntu 24.04
 
 ```bash
-curl -LO https://github.com/impero365/lenovo-Y720-keyboard-backlight/releases/download/v1.1.0/y720-kbled_1.1.0-1_amd64.deb
-sudo apt install ./y720-kbled_1.1.0-1_amd64.deb
+curl -LO https://github.com/impero365/lenovo-Y720-keyboard-backlight/releases/latest/download/y720-kbled_amd64.deb
+sudo apt install ./y720-kbled_amd64.deb
 ```
 
-To upgrade, install the newer `.deb` the same way.
+To upgrade, run the same two commands again.
 
 ### Check the download
 
@@ -176,7 +176,7 @@ makepkg -si
 ```bash
 sudo apt install build-essential pkg-config libgtk-4-dev
 packaging/build-deb.sh
-sudo apt install ./packaging/y720-kbled_1.1.0-1_amd64.deb
+sudo apt install ./packaging/y720-kbled_1.1.1-1_amd64.deb
 ```
 
 Build it on Ubuntu 24.04 itself. A package built on a newer system may not start on 24.04.
