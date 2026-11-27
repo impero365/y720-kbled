@@ -3,3 +3,5 @@
 *.deb
 *.pkg.tar*
 *.pkg.tar*.sig
+/packaging/pkg/
+/packaging/src/

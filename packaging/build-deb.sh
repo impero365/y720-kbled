@@ -35,7 +35,7 @@ Section: utils
 Priority: optional
 Architecture: amd64
 Depends: libgtk-4-1, sudo, systemd
-Maintainer: Y720 Keyboard LEDs <y720-kbled@localhost>
+Maintainer: Lenovo Y720 Keyboard Backlight <y720-kbled@localhost>
 Description: Keyboard backlight controller for the Lenovo Legion Y720
  Sets colors, brightness, and effects for the ITE33D1 keyboard backlight
  and switches profiles with Fn+Space.

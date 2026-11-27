@@ -1,5 +1,5 @@
 [Desktop Entry]
-Name=Y720 Keyboard LEDs
+Name=Lenovo Y720 Keyboard Backlight
 Comment=Control the Lenovo Legion Y720 keyboard backlight
 Exec=y720-kbled --ui
 Icon=y720-kbled
