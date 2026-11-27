@@ -64,9 +64,8 @@ struct Panel {
     delete_profile: gtk::Button,
     apply_brightness: gtk::Button,
     keyboard: gtk::DrawingArea,
-    zone_chips: [gtk::Button; 4],
-    zone_dots: [gtk::Box; 4],
-    zone_details: [gtk::Label; 4],
+    color_hint: gtk::Label,
+    brightness_hint: gtk::Label,
     hover_zone: std::cell::Cell<Option<usize>>,
     status: gtk::Label,
     accent: gtk::CssProvider,
@@ -335,45 +334,12 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
             glib::idle_add_local_once(move || keyboard.set_size_request(-1, height));
         }
     });
-    let zone_row = gtk::Box::new(Orientation::Horizontal, 8);
-    zone_row.set_homogeneous(true);
-    zone_row.add_css_class("zones");
-    let mut zone_dots = Vec::with_capacity(4);
-    let mut zone_details = Vec::with_capacity(4);
-    let zone_chips: [gtk::Button; 4] = std::array::from_fn(|index| {
-        let button = gtk::Button::new();
-        button.add_css_class("zone");
-        let inner = gtk::Box::new(Orientation::Horizontal, 10);
-        let dot = gtk::Box::new(Orientation::Horizontal, 0);
-        dot.add_css_class("dot");
-        dot.set_valign(Align::Center);
-        dot.set_size_request(14, 14);
-        let words = gtk::Box::new(Orientation::Vertical, 0);
-        let name = gtk::Label::new(Some(ZONE_NAMES[index]));
-        name.add_css_class("zone-name");
-        name.set_halign(Align::Start);
-        let detail = gtk::Label::new(None);
-        detail.add_css_class("zone-detail");
-        detail.set_halign(Align::Start);
-        detail.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        words.append(&name);
-        words.append(&detail);
-        inner.append(&dot);
-        inner.append(&words);
-        button.set_child(Some(&inner));
-        zone_row.append(&button);
-        zone_dots.push(dot);
-        zone_details.push(detail);
-        button
-    });
-    let zone_dots: [gtk::Box; 4] = zone_dots.try_into().expect("four zone dots");
-    let zone_details: [gtk::Label; 4] = zone_details.try_into().expect("four zone labels");
     keyboard_card.append(&keyboard);
-    keyboard_card.append(&zone_row);
 
     let color_card = card();
     let color_heading = gtk::Box::new(Orientation::Horizontal, 8);
-    color_heading.append(&section("Color", "Selected zone"));
+    let (color_title, color_hint) = section("Color", "Left zone");
+    color_heading.append(&color_title);
     let color_dot = gtk::Box::new(Orientation::Horizontal, 0);
     color_dot.add_css_class("dot");
     color_dot.set_valign(Align::Center);
@@ -382,19 +348,17 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
     color_value.add_css_class("value");
     color_value.set_halign(Align::End);
     let value_box = gtk::Box::new(Orientation::Horizontal, 8);
-    value_box.set_hexpand(true);
-    value_box.set_halign(Align::End);
-    value_box.set_valign(Align::Start);
+    value_box.set_halign(Align::Start);
+    value_box.set_margin_start(4);
     value_box.append(&color_dot);
     value_box.append(&color_value);
-    color_heading.append(&value_box);
     let swatch_row = gtk::FlowBox::new();
     swatch_row.set_selection_mode(gtk::SelectionMode::None);
     swatch_row.set_homogeneous(true);
     swatch_row.set_column_spacing(6);
     swatch_row.set_row_spacing(6);
-    swatch_row.set_min_children_per_line(5);
-    swatch_row.set_max_children_per_line(10);
+    swatch_row.set_min_children_per_line(2);
+    swatch_row.set_max_children_per_line(2);
     swatch_row.set_halign(Align::Start);
     swatch_row.add_css_class("choices");
     let swatches: [gtk::Button; 20] = std::array::from_fn(|index| {
@@ -407,17 +371,27 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
         let chip = gtk::Box::new(Orientation::Horizontal, 0);
         chip.add_css_class("chip");
         chip.add_css_class(&format!("c{index}"));
-        chip.set_size_request(32, 32);
+        chip.set_size_request(22, 22);
         button.set_child(Some(&chip));
         swatch_row.insert(&button, -1);
         button
     });
     color_card.append(&color_heading);
     color_card.append(&swatch_row);
+    keyboard_card.append(&value_box);
+
+    // The colors sit beside the keyboard, so the page needs one row less.
+    keyboard_card.set_hexpand(true);
+    keyboard.set_vexpand(true);
+    color_card.set_hexpand(false);
+    let top = gtk::Box::new(Orientation::Horizontal, 16);
+    top.append(&keyboard_card);
+    top.append(&color_card);
 
     let brightness_card = card();
     let brightness_heading = gtk::Box::new(Orientation::Horizontal, 8);
-    brightness_heading.append(&section("Brightness", "Selected zone"));
+    let (brightness_title, brightness_hint) = section("Brightness", "Left zone");
+    brightness_heading.append(&brightness_title);
     let apply_brightness = gtk::Button::with_label("Use for all zones");
     apply_brightness.add_css_class("link");
     apply_brightness.set_tooltip_text(Some("Apply this brightness to every zone"));
@@ -441,7 +415,7 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
     brightness_card.append(&brightness_row);
 
     let style_card = card();
-    style_card.append(&section("Effect", "Whole keyboard"));
+    style_card.append(&section("Effect", "Whole keyboard").0);
     let mode_row = choice_flow(5);
     let modes: [gtk::Button; 5] = std::array::from_fn(|index| {
         let button = gtk::Button::with_label(MODES[index].1);
@@ -461,8 +435,7 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
     page.append(&header);
     page.append(&profile_row);
     page.append(&notice);
-    page.append(&keyboard_card);
-    page.append(&color_card);
+    page.append(&top);
     page.append(&split);
 
     let scroll = gtk::ScrolledWindow::builder()
@@ -495,9 +468,8 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
         delete_profile,
         apply_brightness,
         keyboard,
-        zone_chips,
-        zone_dots,
-        zone_details,
+        color_hint,
+        brightness_hint,
         hover_zone: std::cell::Cell::new(None),
         status,
         accent,
@@ -568,14 +540,6 @@ fn wire_controls(panel: &Rc<Panel>) {
         }
     });
     panel.keyboard.add_controller(motion);
-
-    for (index, button) in panel.zone_chips.iter().enumerate() {
-        let ui = Rc::clone(panel);
-        button.connect_clicked(move |_| {
-            ui.selected_zone.set(index);
-            ui.render();
-        });
-    }
 
     for (index, button) in panel.swatches.iter().enumerate() {
         let ui = Rc::clone(panel);
@@ -715,17 +679,12 @@ impl Panel {
         self.delete_profile
             .set_sensitive(config.profiles.len() >= 2);
 
-        for (index, zone) in profile.zones.iter().enumerate().take(4) {
-            let name = COLORS
-                .get(zone.color as usize)
-                .map(|(_, name)| *name)
-                .unwrap_or("Color");
-            self.zone_details[index]
-                .set_text(&format!("{name} · {}", brightness_name(zone.brightness)));
-            set_color_class(&self.zone_dots[index], zone.color);
-            set_on(&self.zone_dots[index], zone.brightness > 0 && zone.color != 19);
-            set_on(&self.zone_chips[index], index == zone_index);
-        }
+        let zone_label = format!(
+            "{} zone",
+            ZONE_NAMES.get(zone_index).copied().unwrap_or("Selected")
+        );
+        self.color_hint.set_text(&zone_label);
+        self.brightness_hint.set_text(&zone_label);
         self.keyboard.queue_draw();
 
         let zone = profile.zones[zone_index];
@@ -983,7 +942,7 @@ fn card() -> gtk::Box {
     card
 }
 
-fn section(text: &str, hint: &str) -> gtk::Box {
+fn section(text: &str, hint: &str) -> (gtk::Box, gtk::Label) {
     let column = gtk::Box::new(Orientation::Vertical, 2);
     let label = gtk::Label::new(Some(&text.to_uppercase()));
     label.add_css_class("section");
@@ -993,7 +952,7 @@ fn section(text: &str, hint: &str) -> gtk::Box {
     hint.set_halign(Align::Start);
     column.append(&label);
     column.append(&hint);
-    column
+    (column, hint)
 }
 
 fn icon_button(icon: &str, text: &str, tooltip: &str) -> gtk::Button {
@@ -1043,7 +1002,7 @@ fn accent_css(color: u8) -> String {
         index => COLORS.get(index as usize).map(|(hex, _)| *hex).unwrap_or("#f4f5f7"),
     };
     format!(
-        "button.choice.on, button.zone.on {{ \
+        "button.choice.on {{ \
            background-color: alpha({hex}, 0.16); \
            border-color: alpha({hex}, 0.85); \
            box-shadow: 0 0 14px alpha({hex}, 0.22); }}\n\
@@ -1074,6 +1033,7 @@ fn set_on(widget: &impl WidgetExt, on: bool) {
     }
 }
 
+#[cfg(test)]
 fn brightness_name(value: u8) -> &'static str {
     BRIGHTNESS[brightness_choice(value)]
 }
@@ -1165,7 +1125,7 @@ fn stylesheet() -> String {
           padding: 10px 14px;
         }
         button.action, button.primary, button.choice, button.swatch,
-        button.zone, button.link {
+        button.link {
           min-height: 0;
           min-width: 0;
           box-shadow: none;
@@ -1235,17 +1195,6 @@ fn stylesheet() -> String {
           background: rgba(255, 255, 255, 0.05);
           background-image: none;
         }
-        button.zone {
-          background: rgba(255, 255, 255, 0.03);
-          background-image: none;
-          color: #eef0f4;
-          border: 1px solid rgba(255, 255, 255, 0.07);
-          border-radius: 12px;
-          padding: 8px 12px;
-        }
-        button.zone:hover { background: rgba(255, 255, 255, 0.07); background-image: none; }
-        .zone-name { font-size: 13px; font-weight: 700; }
-        .zone-detail { font-size: 11px; color: #8a90a0; }
         box.dot {
           border-radius: 999px;
           min-width: 12px;
@@ -1272,7 +1221,7 @@ fn stylesheet() -> String {
         }
         box.bar.on { background-color: #eef0f4; }
         button.swatch {
-          padding: 3px;
+          padding: 2px;
           border-radius: 999px;
           background: transparent;
           background-image: none;
@@ -1344,7 +1293,7 @@ fn stylesheet() -> String {
     for (index, (hex, _)) in COLORS.iter().enumerate() {
         css.push_str(&format!(
             "box.chip.c{index}, box.dot.c{index} {{ background: {hex}; background-image: none; }}\n\
-             button.swatch.s{index}.on {{ box-shadow: 0 0 14px alpha({hex}, 0.55); }}\n"
+             button.swatch.s{index}.on {{ box-shadow: 0 0 10px alpha({hex}, 0.55); }}\n"
         ));
     }
     css
