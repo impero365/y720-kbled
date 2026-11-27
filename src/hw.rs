@@ -6,7 +6,7 @@ use std::sync::mpsc::Sender;
 
 use evdev::{Device, EventType};
 
-use crate::config::Profile;
+use crate::config::{Profile, ZONE_COUNT};
 use crate::error::Error;
 
 pub const HID_NAME_NEEDLE: &str = "HID_NAME=ITE33D1:00 048D:837A";
@@ -30,6 +30,16 @@ pub fn hid_set_feature_request(len: usize) -> libc::c_ulong {
 
 pub fn zone_report(mode: u8, color: u8, brightness: u8, zone: u8) -> [u8; 6] {
     [0xcc, 0, mode, color, brightness, zone]
+}
+
+/// The four zone reports for the side of `profile` in use. With Split zones
+/// off, the same color and brightness go to every zone.
+pub fn profile_reports(profile: &Profile) -> [[u8; 6]; ZONE_COUNT] {
+    let (mode, zones) = profile.effective();
+    std::array::from_fn(|index| {
+        let zone = zones[index];
+        zone_report(mode.code(), zone.color, zone.brightness, index as u8)
+    })
 }
 
 pub fn commit_report() -> [u8; 2] {
@@ -119,9 +129,7 @@ pub fn apply_profile_to(path: &Path, profile: &Profile) -> Result<(), Error> {
         .write(true)
         .open(path)
         .map_err(|source| open_error(path, source))?;
-    let mode = profile.mode.code();
-    for (index, zone) in profile.zones.iter().enumerate() {
-        let mut report = zone_report(mode, zone.color, zone.brightness, index as u8);
+    for mut report in profile_reports(profile) {
         set_feature(file.as_raw_fd(), &mut report)?;
     }
     let mut commit = commit_report();
@@ -240,6 +248,38 @@ mod tests {
         assert_eq!(hid_set_feature_request(2), 0xc0024806);
         assert_eq!(zone_report(3, 1, 4, 2), [0xcc, 0, 3, 1, 4, 2]);
         assert_eq!(commit_report(), [0xcc, 9]);
+    }
+
+    #[test]
+    fn reports_follow_divide_area() {
+        use crate::config::{BacklightMode, Zone};
+        let mut profile = Profile::blank("P");
+        profile.whole.mode = BacklightMode::Breath;
+        profile.whole.zone = Zone { color: 8, brightness: 4 };
+        profile.mode = BacklightMode::Wave;
+        profile.zones[1] = Zone { color: 3, brightness: 1 };
+        assert_eq!(
+            profile_reports(&profile),
+            [
+                [0xcc, 0, 1, 8, 4, 0],
+                [0xcc, 0, 1, 8, 4, 1],
+                [0xcc, 0, 1, 8, 4, 2],
+                [0xcc, 0, 1, 8, 4, 3],
+            ]
+        );
+        profile.divided = true;
+        assert_eq!(
+            profile_reports(&profile),
+            [
+                [0xcc, 0, 4, 19, 2, 0],
+                [0xcc, 0, 4, 3, 1, 1],
+                [0xcc, 0, 4, 19, 2, 2],
+                [0xcc, 0, 4, 19, 2, 3],
+            ]
+        );
+        assert!(profile_reports(&Profile::off())
+            .iter()
+            .all(|report| report[4] == 0));
     }
 
     #[test]

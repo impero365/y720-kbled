@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use crate::config::{Config, Profile};
 use crate::error::Error;
 use crate::hw::Hotkey;
-use crate::proto::{ClientMsg, ServerMsg};
+use crate::proto::{ClientMsg, ServerMsg, PROTOCOL};
 
 enum Work {
     Hotkey(Hotkey),
@@ -149,7 +149,20 @@ where
                 ClientMsg::Get => {
                     reply(&mut clients, id, &config_line(&config, &notice)?);
                 }
-                ClientMsg::Set { config: new_config } => match new_config.check() {
+                ClientMsg::Set { version, .. } if version < PROTOCOL => {
+                    // An older window would drop fields it does not know.
+                    reply(
+                        &mut clients,
+                        id,
+                        &error_line(
+                            "this window is from an older version. Close it and open it again",
+                            Some(config.clone()),
+                        )?,
+                    );
+                }
+                ClientMsg::Set {
+                    config: new_config, ..
+                } => match new_config.check() {
                     Err(error) => {
                         reply(&mut clients, id, &error_line(&error.to_string(), None)?);
                     }
@@ -469,6 +482,103 @@ mod tests {
         }
         assert_eq!(shows.load(Ordering::SeqCst), 1);
         let mut client = wait_client(&socket);
+        client.stop().unwrap();
+        drop(hotkey_tx);
+        handle.join().unwrap();
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn divide_area_survives_cycling_and_old_windows_cannot_wipe_it() {
+        use crate::config::{BacklightMode, Zone};
+        use std::io::{BufRead, BufReader, Write};
+
+        let dir = scratch();
+        let socket = dir.join("sock");
+        let config_path = dir.join("config.json");
+        let config = Config::default();
+        config.save(&config_path).unwrap();
+        let listener = UnixListener::bind(&socket).unwrap();
+        let (hotkey_tx, hotkey_rx) = mpsc::channel();
+        let applied = Arc::new(Mutex::new(Vec::<Profile>::new()));
+        let applied_bg = Arc::clone(&applied);
+        let path = config_path.clone();
+        let handle = thread::spawn(move || {
+            serve(
+                config,
+                &path,
+                listener,
+                hotkey_rx,
+                String::new(),
+                move |profile| {
+                    applied_bg.lock().unwrap().push(profile.clone());
+                    Ok(())
+                },
+                || {},
+            )
+            .unwrap();
+        });
+        let mut client = wait_client(&socket);
+
+        // Profile 1 whole, Profile 2 divided, each with values on both sides.
+        let mut next = Config::load(&config_path).unwrap();
+        let whole = &mut next.profiles[1];
+        whole.divided = false;
+        whole.whole.mode = BacklightMode::Breath;
+        whole.whole.zone = Zone { color: 8, brightness: 4 };
+        whole.zones[2] = Zone { color: 5, brightness: 1 };
+        let mut divided = Profile::blank("Two");
+        divided.divided = true;
+        divided.mode = BacklightMode::Wave;
+        divided.zones[3] = Zone { color: 12, brightness: 4 };
+        divided.whole.zone.color = 3;
+        next.profiles.push(divided);
+        let expected = client.set_config(next).unwrap();
+        assert_eq!(applied.lock().unwrap().len(), 1);
+
+        // Fn+Space to Two, Off, and back to Profile 1. Each applies the
+        // side it has selected, and nothing is lost on the way.
+        for want in [2, 0, 1] {
+            hotkey_tx.send(Hotkey::Cycle).unwrap();
+            assert_eq!(client.read().unwrap().config().unwrap().selected, want);
+        }
+        let seen = applied.lock().unwrap().clone();
+        assert_eq!(seen[1].effective().0, BacklightMode::Wave);
+        assert_eq!(seen[1].effective().1[3].color, 12);
+        assert_eq!(seen[1].effective().1[0].color, crate::config::BLACK);
+        assert!(seen[2].off);
+        let (mode, zones) = seen[3].effective();
+        assert_eq!(mode, BacklightMode::Breath);
+        assert!(zones.iter().all(|zone| *zone == Zone { color: 8, brightness: 4 }));
+        let saved = Config::load(&config_path).unwrap();
+        assert_eq!(saved.profiles, expected.profiles);
+
+        // A window from before Split zones sends no version. Its config
+        // lacks the new fields, so it is refused and nothing changes.
+        let mut old = UnixStream::connect(&socket).unwrap();
+        old.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let stale = serde_json::json!({
+            "op": "set",
+            "config": {"selected": 1, "profiles": [
+                {"name": "Off", "mode": "always_on", "off": true,
+                 "zones": [{"color":0,"brightness":0},{"color":0,"brightness":0},{"color":0,"brightness":0},{"color":0,"brightness":0}]},
+                {"name": "Profile 1", "mode": "always_on",
+                 "zones": [{"color":1,"brightness":1},{"color":1,"brightness":1},{"color":1,"brightness":1},{"color":1,"brightness":1}]}
+            ]}
+        });
+        writeln!(old, "{stale}").unwrap();
+        let mut line = String::new();
+        BufReader::new(old.try_clone().unwrap()).read_line(&mut line).unwrap();
+        match serde_json::from_str::<ServerMsg>(&line).unwrap() {
+            ServerMsg::Error { message, config } => {
+                assert!(message.contains("older version"), "{message}");
+                assert_eq!(config.unwrap().profiles, expected.profiles);
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+        assert_eq!(applied.lock().unwrap().len(), 4, "the keyboard is not touched");
+        assert_eq!(Config::load(&config_path).unwrap().profiles, expected.profiles);
+
         client.stop().unwrap();
         drop(hotkey_tx);
         handle.join().unwrap();

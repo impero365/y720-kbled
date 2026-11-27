@@ -18,6 +18,13 @@ All notable changes to this project are listed here. The format follows
 - The window reconnects to the backlight service on its own. When the service
   is not running, or restarts during a package upgrade, the window retries
   every 1 to 5 seconds and loads the profiles again once the service answers.
+- Full | Split, at the end of the Brightness row. Split colors the four zones
+  one by one, as before. Full uses one color, one brightness, and one effect
+  for the whole keyboard. Each profile keeps both and remembers which one is
+  in use, and Fn+Space lights each profile that way. Profiles saved before
+  this version keep their four zones, in Split.
+- In Full, `y720-kbled set` changes the whole keyboard, and `--zone` is
+  refused.
 
 ### Changed
 
@@ -28,6 +35,11 @@ All notable changes to this project are listed here. The format follows
 - All text in the window is one step smaller.
 - The profile dropdown is slimmer.
 - "All zones" is always underlined.
+- New makes a blank profile (no color, Medium, Always on, Full)
+  instead of a copy of the current one.
+- A settings window left open from an older version can no longer save
+  changes. It shows a message asking you to close it and open it again, so it
+  cannot erase the Full or Split setting from your profiles.
 - The README, the desktop entry, and the Debian package use the name
   "Lenovo Y720 Keyboard Backlight". The PKGBUILD points at the renamed
   repository.

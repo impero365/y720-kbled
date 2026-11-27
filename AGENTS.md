@@ -27,7 +27,7 @@ The udev rule is `packaging/70-y720-kbled.rules`. Do not filter on `ACTION=="add
 
 Arch first, Ubuntu 24.04 as well. Build the Arch package with `makepkg` from `packaging/`. This machine uses rustup, so the PKGBUILD finds `~/.cargo/bin` and does not depend on the distro `rust` package. `options=('!debug' '!lto')`.
 
-`pacman -U` upgrades in place. Do not tell the user to remove the package first: `post_remove` deletes `/var/lib/y720-kbled`. Removal must stop and disable the service, reload udev, delete the `y720` account, and delete `/run/y720-kbled` and `/var/lib/y720-kbled`. Bump `pkgrel` when the packaged files or the install script change.
+`pacman -U` upgrades in place. Do not tell the user to remove the package first: `post_remove` deletes `/var/lib/y720-kbled`. Removal must stop and disable the service, reload udev, delete the `y720` account, and delete `/run/y720-kbled` and `/var/lib/y720-kbled`. Every package build gets a higher build number than the last one: raise `pkgrel` in `packaging/PKGBUILD` and `release` in `packaging/build-deb.sh` (kept equal) before each `makepkg` or `build-deb.sh`, even when only the code changed. Reset both to 1 when the version changes.
 
 Flatpak does not fit hidraw and evdev. Do not add it.
 

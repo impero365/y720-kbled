@@ -1,83 +1,168 @@
 <div align="center">
-  <img src="assets/icon.png" width="96" alt="Y720 keyboard backlight icon">
 
-  # Y720 keyboard backlight
+  # Lenovo Y720 Keyboard Backlight
 
-  *Control the Lenovo Legion Y720 keyboard lights from Linux.*
-
-  [Features](#features) • [Install](#install) • [Usage](#usage)
+  *Set the colors of your Lenovo Legion Y720 keyboard on Linux.*
 
 </div>
 
-One system service owns the keyboard. The GTK 4 window and the `y720-kbled set` command talk to it. Profiles are shared by every account on the machine. Closing the window leaves the lights as they are.
+The Legion Y720 has an RGB keyboard, but Lenovo only made software for it on Windows. This app does the same job on Linux. You can pick a color for each part of the keyboard and an effect for the whole thing, save them as profiles, and switch between profiles with a key.
 
-## Features
+Your colors are restored when the laptop starts, before you log in.
 
-- Four zones, left to right and then the numpad, each with its own color and effect.
-- Effects: Always on, Heartbeat, Breath, Smooth, and Wave. Twenty colors.
-- Brightness steps Off, Low, Medium, and High. Saved profiles may still use the in-between hardware values 3 and 5.
-- Fn+Space cycles profiles. Fn+numpad 7 opens the window.
-- A StatusNotifier tray icon, so the window does not need GTK 3.
-- The saved color is written again at boot.
+<p align="center">
+  <img src="assets/screenshot.png" width="764" alt="The settings window. The keyboard is drawn with its left zone orange, the center white, the right violet, and the numpad magenta. The 20 colors are on the right, and the Brightness and Effect rows are below.">
+</p>
+
+## What you can do
+
+- **Color each zone on its own, or the whole keyboard at once.** The keyboard has four zones: three across the main keys, left to right, and one for the numpad. Set it to **Full** for one color across the whole keyboard.
+- **Pick an effect.** Always on, Breath, Heartbeat, Smooth, or Wave.
+- **Choose from 20 colors** and four brightness levels: Off, Low, Medium, and High.
+- **Save profiles** and flip through them with **Fn+Space**.
+- **Turn the lights off** with the built-in **Off** profile. It's always at the top of the list, so Fn+Space passes through it too.
+- **Open the settings window** with **Fn+numpad 7**, or from the tray icon or your app launcher.
 
 > [!NOTE]
-> Fn+numpad 7 is a key the keyboard sends only while Num Lock is off. With Num Lock on, that key is an ordinary 7 and the service never sees the shortcut.
+> Fn+numpad 7 only works while Num Lock is off. With Num Lock on, the key just types a 7.
 
 ## Install
 
-Arch, from `packaging/`:
+### Arch Linux
+
+You need a Rust toolchain (for example through [rustup](https://rustup.rs)). Then, from the `packaging` folder:
 
 ```bash
 makepkg -si
 ```
 
-That builds `y720-kbled`, creates the system account `y720`, reloads udev, and enables `y720-kbled.service`. The service starts at boot. Upgrade an existing install with `sudo pacman -U` on the new package. Do not remove the package first: removal deletes `/var/lib/y720-kbled`.
+That's it. The lights come on with your saved colors from now on, every time the laptop boots.
 
-Ubuntu 24.04, from the repository root:
+To install a newer version later, build it the same way and install it over the old one. The file name has the version in it, for example:
+
+```bash
+sudo pacman -U y720-kbled-1.0.0-1-x86_64.pkg.tar.zst
+```
+
+You don't need to uninstall first. In fact, don't: uninstalling deletes your saved profiles.
+
+### Ubuntu 24.04
+
+From the top folder of the project:
 
 ```bash
 packaging/build-deb.sh
 sudo apt install ./packaging/y720-kbled_1.0.0_amd64.deb
 ```
 
-The `.deb` depends on `libgtk-4-1`, `sudo`, and `systemd`. Arch uses the `gtk4` package. Flatpak is not used: the program needs hidraw and the keyboard's evdev node.
+### Uninstall
 
-> [!WARNING]
-> `sudo pacman -Rns y720-kbled` stops the service, reloads udev, deletes the `y720` account, and deletes the saved profiles.
+```bash
+sudo pacman -Rns y720-kbled
+```
 
-### Run from a checkout
+This removes the app and also **deletes your saved profiles**.
 
-Install a stable Rust toolchain and GTK 4, then:
+## Using it
+
+Most of the time you'll use the window. Open it with Fn+numpad 7, from the app launcher (look for "Lenovo Y720 Keyboard Backlight"), or from a terminal:
+
+```bash
+y720-kbled --ui
+```
+
+Closing the window doesn't turn anything off. Your colors stay as they are.
+
+Everyone who uses the laptop shares the same profiles. Anyone logged in can change the colors.
+
+### In the window
+
+The window shows your keyboard with its current colors. Every change goes to the keyboard right away, and both change at the same moment.
+
+- **Full | Split**, at the end of the Brightness row, picks how the profile lights the keyboard. Split colors the four zones one by one; Full uses one color for the whole keyboard. Click either side to switch. Each profile keeps both sets of color, brightness, and effect, and remembers which one is in use. Fn+Space lights each profile the way it was left.
+- **Pick a zone** by clicking any key in it, or press **Tab** for the next zone and **Shift+Tab** for the previous one.
+- **Pick a color** by clicking a circle, or use the **arrow keys**. The black circle with a red line turns that zone off.
+- **Brightness** applies to the zone you picked, or to the whole keyboard in Full. **All zones** copies it to the other three zones.
+- **Effect** applies to the whole keyboard.
+- **New** makes a blank profile: no color, Medium brightness, Always on, in Full. **Rename** renames the profile, and **Delete** removes it.
+
+In Full, clicking the keys and pressing Tab don't pick zones, because there is only one. The arrow keys still change the color.
+
+The **Off** profile turns every zone off. While it's selected, the window shows a dark keyboard with "Backlight Off". It can't be renamed, changed, or deleted, and new profiles always go below it.
+
+A fresh install starts with two profiles, Off and Profile 1, and Profile 1 is selected, so the keyboard lights up red. Profiles saved before this button existed keep their four zones, in Split.
+
+The window fits in a quarter of a 1920×1080 screen when your desktop tiles windows.
+
+### From the terminal
+
+If you'd rather script it, `y720-kbled set` changes the current profile:
+
+```bash
+# Every zone solid, color 0, medium brightness
+y720-kbled set --mode always_on --color 0 --brightness 2
+
+# Just the numpad, with a wave effect
+y720-kbled set --zone 3 --mode wave --color 4
+```
+
+- `--mode` is one of `always_on`, `breath`, `heartbeat`, `smooth`, or `wave`.
+- `--color` is a number from 0 to 19.
+- `--brightness` goes from 0 (off) to 5. The window uses 0, 1, 2, and 4, because the keyboard shows 2 and 3 the same, and 4 and 5 the same.
+- `--zone` is 0, 1, or 2 for the main keys, left to right, and 3 for the numpad. Leave it out to change every zone.
+
+`set` changes whichever side the profile is using. In Full, `--color`, `--brightness`, and `--mode` apply to the whole keyboard, and `--zone` is refused.
+
+`set` refuses to change the Off profile. Pick another profile first, in the window or with Fn+Space.
+
+Run `y720-kbled --help` to see every command.
+
+## When something doesn't work
+
+**The colors don't change.** Check that the background service is running:
+
+```bash
+systemctl status y720-kbled.service
+```
+
+**The window says "Not connected".** The window can't reach the background service. It keeps trying on its own and picks up again as soon as the service is back, for example after an upgrade restarts it. If it doesn't, start the service:
+
+```bash
+sudo systemctl enable --now y720-kbled.service
+```
+
+**Fn+Space or Fn+numpad 7 do nothing.** Make sure Num Lock is off for Fn+numpad 7. To see whether the laptop gets the key presses at all, run this and press the keys. Ctrl-C stops it.
+
+```bash
+sudo y720-kbled watch
+```
+
+**Is my keyboard detected?** This lists what the app found, without changing anything:
+
+```bash
+y720-kbled devices
+```
+
+## How it works
+
+A small background service starts when the laptop boots and is the only thing that talks to the keyboard. It runs as its own system account, `y720`, which is the only account allowed to touch the keyboard's devices. The window, the tray icon, and the `set` command all ask the service to make changes.
+
+Profiles are saved in `/var/lib/y720-kbled/config.json`.
+
+## Building from source
+
+You need Rust and GTK 4.
 
 ```bash
 cargo build --release
 ./target/release/y720-kbled devices
 ```
 
-`devices` only prints the LED and keyboard nodes. It does not change the color. The installed service is what applies a profile.
+Running it from a checkout doesn't change the colors by itself. The installed service does that.
 
-## Usage
+## Changes
 
-Open the window:
-
-```bash
-y720-kbled --ui
-```
-
-Set the selected profile from a shell. Color is an index from 0 to 19. Brightness is 0 to 5. Zone 0 is the left block and zone 3 is the numpad. Omit `--zone` to change every zone.
-
-```bash
-y720-kbled set --mode always_on --color 0 --brightness 2
-y720-kbled set --zone 3 --mode wave --color 4
-y720-kbled apply
-```
-
-Modes are `always_on`, `heartbeat`, `breath`, `smooth`, and `wave`.
-
-The service listens on `/run/y720-kbled/sock`. Profiles live in `/var/lib/y720-kbled/config.json`. Any local account may change colors. Stopping the service needs root or the `y720` account.
-
-> [!TIP]
-> `sudo y720-kbled watch` prints Fn+Space and Fn+numpad 7 until you press Ctrl-C. The keyboard node is not readable by a normal login, so this needs root. The service sees the same events and will also open the window or cycle a profile.
+See [CHANGELOG.md](CHANGELOG.md) for what changed in each version.
 
 ## Thanks
 

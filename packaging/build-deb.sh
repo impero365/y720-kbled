@@ -5,6 +5,8 @@ set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 version=1.0.0
+# Raised on every build, like pkgrel in the PKGBUILD. Back to 1 on a new version.
+release=13
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 
@@ -30,7 +32,7 @@ install -m644 "$root/assets/128x128.png" "$stage/usr/share/icons/hicolor/128x128
 
 cat > "$stage/DEBIAN/control" << EOF
 Package: y720-kbled
-Version: $version
+Version: $version-$release
 Section: utils
 Priority: optional
 Architecture: amd64
@@ -81,6 +83,6 @@ fi
 EOF
 chmod 755 "$stage/DEBIAN/postrm"
 
-out="$root/packaging/y720-kbled_${version}_amd64.deb"
+out="$root/packaging/y720-kbled_${version}-${release}_amd64.deb"
 dpkg-deb --root-owner-group --build "$stage" "$out"
 echo "wrote $out"

@@ -13,7 +13,7 @@ use gtk::{Align, Orientation};
 use crate::cli::connect_service;
 use crate::config::{BacklightMode, Config, Profile};
 use crate::error::Error;
-use crate::proto::{ClientMsg, ServerMsg};
+use crate::proto::{ClientMsg, ServerMsg, PROTOCOL};
 
 const COLORS: [(&str, &str); 20] = [
     ("#e51012", "Red"),
@@ -49,6 +49,8 @@ const SWATCH_COLUMNS: u32 = 2;
 const BRIGHTNESS: [&str; 4] = ["Off", "Low", "Medium", "High"];
 /// Bytes written for those four labels. On this keyboard 3 matches 2, and 5 matches 4.
 const BRIGHTNESS_VALUES: [u8; 4] = [0, 1, 2, 4];
+/// Full | Split: one color for the whole keyboard, or four zones.
+const LAYOUTS: [&str; 2] = ["Full", "Split"];
 const ZONE_NAMES: [&str; 4] = ["Left", "Center", "Right", "Numpad"];
 const MODES: [(BacklightMode, &str); 5] = [
     (BacklightMode::AlwaysOn, "Always on"),
@@ -77,7 +79,9 @@ struct Panel {
     keyboard: gtk::DrawingArea,
     brightness_hint: gtk::Label,
     /// Hidden while the Off profile is selected.
-    lit_controls: [gtk::Widget; 3],
+    lit_controls: [gtk::Widget; 4],
+    /// The two halves of the Full | Split control, in that order.
+    layout: [gtk::Button; 2],
     hover_zone: std::cell::Cell<Option<usize>>,
     status: gtk::Label,
     accent: gtk::CssProvider,
@@ -296,7 +300,7 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
     profiles.add_css_class("profile");
     // Its own height, not stretched to the tallest button in the bar.
     profiles.set_valign(Align::Center);
-    let add = icon_button("list-add-symbolic", "New", "Copy this profile into a new one");
+    let add = icon_button("list-add-symbolic", "New", "Make a new blank profile");
     let rename = icon_button("document-edit-symbolic", "Rename", "Rename this profile");
     let delete_profile = icon_button("user-trash-symbolic", "Delete", "Delete this profile");
     delete_profile.add_css_class("danger");
@@ -408,6 +412,28 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
     brightness_card.append(&brightness_title);
     brightness_card.append(&brightness_row);
     brightness_card.append(&apply_brightness);
+    brightness_card.set_hexpand(true);
+
+    // Full | Split sits at the end of the Brightness line, with no box of
+    // its own.
+    let segmented = gtk::Box::new(Orientation::Horizontal, 2);
+    segmented.add_css_class("segmented");
+    segmented.set_homogeneous(true);
+    segmented.set_valign(Align::Center);
+    // A little more air between it and the Brightness box.
+    segmented.set_margin_start(6);
+    segmented.set_tooltip_text(Some(
+        "Full: one color for the whole keyboard. Split: four zones. Click to switch",
+    ));
+    let layout: [gtk::Button; 2] = std::array::from_fn(|index| {
+        let button = gtk::Button::with_label(LAYOUTS[index]);
+        button.add_css_class("segment");
+        segmented.append(&button);
+        button
+    });
+    let brightness_line = gtk::Box::new(Orientation::Horizontal, 6);
+    brightness_line.append(&brightness_card);
+    brightness_line.append(&segmented);
 
     let style_card = control_row();
     let (style_title, _) = section("Effect", "Whole keyboard");
@@ -422,7 +448,7 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
     style_card.append(&style_title);
     style_card.append(&mode_row);
 
-    keyboard_card.append(&brightness_card);
+    keyboard_card.append(&brightness_line);
     keyboard_card.append(&style_card);
 
     page.append(&header);
@@ -466,7 +492,9 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
             color_card.clone().upcast(),
             brightness_card.clone().upcast(),
             style_card.clone().upcast(),
+            segmented.clone().upcast(),
         ],
+        layout,
         hover_zone: std::cell::Cell::new(None),
         status,
         accent,
@@ -508,7 +536,7 @@ fn wire_controls(panel: &Rc<Panel>) {
     click.set_button(1);
     let ui = Rc::clone(panel);
     click.connect_released(move |_, _, x, y| {
-        if ui.off_selected() {
+        if !ui.zones_selectable() {
             return;
         }
         if let Some(zone) = zone_at(ui.keyboard.width(), ui.keyboard.height(), x, y) {
@@ -521,7 +549,7 @@ fn wire_controls(panel: &Rc<Panel>) {
     let motion = gtk::EventControllerMotion::new();
     let ui = Rc::clone(panel);
     motion.connect_motion(move |_, x, y| {
-        let next = if ui.off_selected() {
+        let next = if !ui.zones_selectable() {
             None
         } else {
             zone_at(ui.keyboard.width(), ui.keyboard.height(), x, y)
@@ -556,7 +584,7 @@ fn wire_controls(panel: &Rc<Panel>) {
                 | gtk::gdk::ModifierType::ALT_MASK
                 | gtk::gdk::ModifierType::SUPER_MASK;
             if modifiers.intersects(other)
-                || ui.off_selected()
+                || !ui.zones_selectable()
                 || typing(&ui.window)
                 || popup_open(&ui.profiles)
             {
@@ -593,8 +621,7 @@ fn wire_controls(panel: &Rc<Panel>) {
             .borrow()
             .as_ref()
             .and_then(|config| config.profiles.get(config.selected))
-            .and_then(|profile| profile.zones.get(zone))
-            .map(|zone| zone.color as usize)
+            .map(|profile| profile.zone(zone).color as usize)
         else {
             return glib::Propagation::Proceed;
         };
@@ -602,7 +629,7 @@ fn wire_controls(panel: &Rc<Panel>) {
         if next != current {
             with_config(&ui, |config| {
                 if let Some(profile) = config.profiles.get_mut(config.selected) {
-                    profile.zones[zone].color = next as u8;
+                    profile.zone_mut(zone).color = next as u8;
                 }
             });
         }
@@ -616,7 +643,7 @@ fn wire_controls(panel: &Rc<Panel>) {
             with_config(&ui, |config| {
                 let zone = ui.selected_zone.get();
                 if let Some(profile) = config.profiles.get_mut(config.selected) {
-                    profile.zones[zone].color = index as u8;
+                    profile.zone_mut(zone).color = index as u8;
                 }
             });
         });
@@ -628,7 +655,25 @@ fn wire_controls(panel: &Rc<Panel>) {
             with_config(&ui, |config| {
                 let zone = ui.selected_zone.get();
                 if let Some(profile) = config.profiles.get_mut(config.selected) {
-                    profile.zones[zone].brightness = BRIGHTNESS_VALUES[index];
+                    profile.zone_mut(zone).brightness = BRIGHTNESS_VALUES[index];
+                }
+            });
+        });
+    }
+
+    // Either half switches to the other side, so one click always flips it.
+    for button in &panel.layout {
+        let ui = Rc::clone(panel);
+        button.connect_clicked(move |_| {
+            if ui.off_selected() {
+                return;
+            }
+            ui.selected_zone.set(0);
+            with_config(&ui, |config| {
+                if let Some(profile) = config.profiles.get_mut(config.selected) {
+                    if !profile.off {
+                        profile.divided = !profile.divided;
+                    }
                 }
             });
         });
@@ -639,7 +684,7 @@ fn wire_controls(panel: &Rc<Panel>) {
         button.connect_clicked(move |_| {
             with_config(&ui, |config| {
                 if let Some(profile) = config.profiles.get_mut(config.selected) {
-                    profile.mode = MODES[index].0;
+                    *profile.active_mode_mut() = MODES[index].0;
                 }
             });
         });
@@ -656,14 +701,10 @@ fn wire_controls(panel: &Rc<Panel>) {
         let ui = Rc::clone(&ui);
         let parent = ui.window.clone();
         ask_name(&parent, "New profile", &suggested, move |name| {
+            ui.selected_zone.set(0);
             with_config(&ui, |config| {
-                // Off is not a starting point: a profile made from it starts lit.
-                let mut copy = match config.profiles.get(config.selected) {
-                    Some(profile) if !profile.off => profile.clone(),
-                    _ => Profile::lit(&name),
-                };
-                copy.name = name;
-                config.profiles.push(copy);
+                // A new profile starts blank, with Split zones off.
+                config.profiles.push(Profile::blank(&name));
                 config.selected = config.profiles.len() - 1;
             });
         });
@@ -711,6 +752,11 @@ fn wire_controls(panel: &Rc<Panel>) {
             let Some(profile) = config.profiles.get_mut(config.selected) else {
                 return;
             };
+            // Only the four zones have brightness to copy. The button is
+            // hidden otherwise.
+            if !profile.divided || profile.off {
+                return;
+            }
             let zone = ui.selected_zone.get().min(profile.zones.len() - 1);
             let level = profile.zones[zone].brightness;
             for zone in &mut profile.zones {
@@ -727,6 +773,16 @@ impl Panel {
             .as_ref()
             .and_then(|config| config.profiles.get(config.selected))
             .is_some_and(|profile| profile.off)
+    }
+
+    /// True when clicking, hovering, and Tab pick a zone: a lit profile
+    /// with Split zones on.
+    fn zones_selectable(&self) -> bool {
+        self.config
+            .borrow()
+            .as_ref()
+            .and_then(|config| config.profiles.get(config.selected))
+            .is_some_and(|profile| profile.divided && !profile.off)
     }
 
     fn set_status(&self, connected: bool) {
@@ -749,7 +805,12 @@ impl Panel {
         let Some(profile) = config.profiles.get(config.selected) else {
             return;
         };
-        let zone_index = self.selected_zone.get().min(profile.zones.len() - 1);
+        let divided = profile.uses_zones();
+        let zone_index = if divided {
+            self.selected_zone.get().min(ZONE_NAMES.len() - 1)
+        } else {
+            0
+        };
 
         self.refreshing.set(true);
         while self.profile_model.n_items() > 0 {
@@ -766,27 +827,34 @@ impl Panel {
         for widget in &self.lit_controls {
             widget.set_visible(!profile.off);
         }
+        // With one color for the whole keyboard there are no other zones
+        // to copy brightness to.
+        self.apply_brightness.set_visible(divided);
+        set_on(&self.layout[0], !profile.divided);
+        set_on(&self.layout[1], profile.divided);
 
-        let zone_label = format!(
-            "{} zone",
-            ZONE_NAMES.get(zone_index).copied().unwrap_or("Selected")
-        );
-        self.brightness_hint.set_text(&zone_label);
+        let hint = if divided {
+            format!(
+                "{} zone",
+                ZONE_NAMES.get(zone_index).copied().unwrap_or("Selected")
+            )
+        } else {
+            "Whole keyboard".to_string()
+        };
+        self.brightness_hint.set_text(&hint);
         self.keyboard.queue_draw();
 
-        let zone = profile.zones[zone_index];
+        let zone = profile.zone(zone_index);
         self.accent.load_from_string(&accent_css(zone.color));
         for (index, button) in self.swatches.iter().enumerate() {
-            set_on(button, index == profile.zones[zone_index].color as usize);
+            set_on(button, index == zone.color as usize);
         }
         for (index, button) in self.brightness.iter().enumerate() {
-            set_on(
-                button,
-                index == brightness_choice(profile.zones[zone_index].brightness),
-            );
+            set_on(button, index == brightness_choice(zone.brightness));
         }
+        let mode = profile.active_mode();
         for (index, button) in self.modes.iter().enumerate() {
-            set_on(button, MODES[index].0 == profile.mode);
+            set_on(button, MODES[index].0 == mode);
         }
     }
 }
@@ -888,7 +956,10 @@ impl Panel {
             let Some(config) = outbox.borrow_mut().take() else {
                 return;
             };
-            if let Err(error) = write_line(&writer, &ClientMsg::Set { config }) {
+            if let Err(error) = write_line(&writer, &ClientMsg::Set {
+                    config,
+                    version: PROTOCOL,
+                }) {
                 let text = sentence_case(error.trim());
                 notice.set_text(&text);
                 notice.set_visible(!text.is_empty());
@@ -1221,6 +1292,7 @@ fn accent_css(color: u8) -> String {
 
 const SECTION_WIDTH: i32 = 96;
 
+
 fn control_row() -> gtk::Box {
     let row = gtk::Box::new(Orientation::Horizontal, 10);
     row.add_css_class("card");
@@ -1383,6 +1455,36 @@ fn stylesheet() -> String {
         }
         .swatch-card { padding: 4px 8px; }
         .control-row { padding: 3px 8px 3px 12px; border-radius: 14px; }
+        /* Full | Split: two small buttons in a shared track. The chosen one
+           is shown in negative, and does not follow the zone color. */
+        box.segmented {
+          padding: 2px;
+          border-radius: 10px;
+          background-color: rgba(255, 255, 255, 0.05);
+          border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+        button.segment {
+          min-height: 0;
+          min-width: 0;
+          padding: 4px 10px;
+          border-radius: 8px;
+          background: transparent;
+          background-image: none;
+          border: 1px solid transparent;
+          box-shadow: none;
+          color: #a9afbd;
+          font-size: 12px;
+          font-weight: 600;
+          transition: background-color 120ms ease, border-color 120ms ease,
+                      color 120ms ease;
+        }
+        button.segment:hover { color: #eef0f4; background-color: rgba(255, 255, 255, 0.05); }
+        button.segment.on,
+        button.segment.on:hover {
+          background-color: #eef0f4;
+          border-color: #eef0f4;
+          color: #0e0f13;
+        }
         .notice {
           background-color: rgba(255, 170, 60, 0.10);
           color: #ffd9a8;
@@ -1774,7 +1876,7 @@ fn zone_paints(panel: &Panel) -> [ZonePaint; 4] {
     let Some(profile) = config.profiles.get(config.selected) else {
         return paints;
     };
-    for (index, zone) in profile.zones.iter().enumerate().take(4) {
+    for (index, zone) in profile.effective().1.iter().enumerate() {
         let hex = COLORS
             .get(zone.color as usize)
             .map(|(hex, _)| *hex)
@@ -1811,8 +1913,10 @@ fn draw_keyboard(panel: &Panel, cr: &gtk::cairo::Context, width: i32, height: i3
             paint.black = true;
         }
     }
-    let selected = if off { usize::MAX } else { panel.selected_zone.get() };
-    let hover = if off { None } else { panel.hover_zone.get() };
+    // No zone is picked while Off is selected or Split zones is off.
+    let selectable = panel.zones_selectable();
+    let selected = if selectable { panel.selected_zone.get() } else { usize::MAX };
+    let hover = if selectable { panel.hover_zone.get() } else { None };
 
     let _ = cr.save();
     cr.translate(ox, oy);

@@ -5,7 +5,7 @@ use std::time::Duration;
 use clap::{Parser, Subcommand};
 
 use crate::client::Client;
-use crate::config::{BacklightMode, Config};
+use crate::config::{BacklightMode, Config, ZONE_COUNT};
 use crate::error::Error;
 use crate::hw;
 use crate::paths::Paths;
@@ -48,13 +48,14 @@ enum Command {
         /// heartbeat, breath, smooth, always_on, or wave.
         #[arg(long)]
         mode: Option<String>,
-        /// Color index 0-19. Applies to every zone unless --zone is set.
+        /// Color index 0-19. Applies to every zone unless --zone is set,
+        /// or to the whole keyboard when the profile is set to Full.
         #[arg(long)]
         color: Option<u8>,
         /// Brightness 0-5. Applies to every zone unless --zone is set.
         #[arg(long)]
         brightness: Option<u8>,
-        /// Zone 0-3. Left to right, then the numpad.
+        /// Zone 0-3. Left to right, then the numpad. Only when the profile is set to Split.
         #[arg(long)]
         zone: Option<usize>,
     },
@@ -199,24 +200,33 @@ fn set(
             ));
         }
         if let Some(mode) = mode {
-            profile.mode = mode;
+            *profile.active_mode_mut() = mode;
         }
         let zones: Vec<usize> = match zone {
-            Some(index) if index < profile.zones.len() => vec![index],
+            Some(_) if !profile.divided => {
+                return Err(Error::Msg(
+                    "this profile is set to Full, so it has one color for the whole keyboard. Leave out --zone"
+                        .into(),
+                ))
+            }
+            Some(index) if index < ZONE_COUNT => vec![index],
             Some(index) => {
                 return Err(Error::Msg(format!(
                     "zone must be 0-{}, got {index}",
-                    profile.zones.len() - 1
+                    ZONE_COUNT - 1
                 )))
             }
-            None => (0..profile.zones.len()).collect(),
+            // With Split zones off, every index is the one whole zone.
+            None if !profile.divided => vec![0],
+            None => (0..ZONE_COUNT).collect(),
         };
         for index in zones {
+            let target = profile.zone_mut(index);
             if let Some(color) = color {
-                profile.zones[index].color = color;
+                target.color = color;
             }
             if let Some(brightness) = brightness {
-                profile.zones[index].brightness = brightness;
+                target.brightness = brightness;
             }
         }
         Ok(())

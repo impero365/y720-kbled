@@ -6,7 +6,7 @@ use std::time::Duration;
 use crate::config::Config;
 use crate::error::Error;
 use crate::paths::Paths;
-use crate::proto::{ClientMsg, ServerMsg};
+use crate::proto::{ClientMsg, ServerMsg, PROTOCOL};
 
 pub struct Client {
     reader: BufReader<UnixStream>,
@@ -31,7 +31,10 @@ impl Client {
     }
 
     pub fn set_config(&mut self, config: Config) -> Result<Config, Error> {
-        self.roundtrip(&ClientMsg::Set { config })?.into_config()
+        self.roundtrip(&ClientMsg::Set {
+            config,
+            version: PROTOCOL,
+        })?.into_config()
     }
 
     pub fn stop(&mut self) -> Result<(), Error> {
