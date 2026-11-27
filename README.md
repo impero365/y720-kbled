@@ -28,40 +28,47 @@ Your colors are restored when the laptop starts, before you log in.
 
 ## Install
 
+Download the package for your system from the [latest release](https://github.com/impero365/lenovo-Y720-keyboard-backlight/releases/latest). Each release has an Arch package (`.pkg.tar.zst`), an Ubuntu package (`.deb`), and a `SHA256SUMS` file to check them against.
+
 ### Arch Linux
 
-You need a Rust toolchain (for example through [rustup](https://rustup.rs)). Then, from the `packaging` folder:
-
 ```bash
-makepkg -si
+curl -LO https://github.com/impero365/lenovo-Y720-keyboard-backlight/releases/download/v1.1.0/y720-kbled-1.1.0-1-x86_64.pkg.tar.zst
+sudo pacman -U y720-kbled-1.1.0-1-x86_64.pkg.tar.zst
 ```
 
 That's it. The lights come on with your saved colors from now on, every time the laptop boots.
 
-To install a newer version later, build it the same way and install it over the old one. The file name has the version in it, for example:
-
-```bash
-sudo pacman -U y720-kbled-1.0.0-1-x86_64.pkg.tar.zst
-```
-
-You don't need to uninstall first. In fact, don't: uninstalling deletes your saved profiles.
+To upgrade, download the newer package and install it the same way, over the old one. You don't need to uninstall first. In fact, don't: uninstalling deletes your saved profiles.
 
 ### Ubuntu 24.04
 
-From the top folder of the project:
+```bash
+curl -LO https://github.com/impero365/lenovo-Y720-keyboard-backlight/releases/download/v1.1.0/y720-kbled_1.1.0-1_amd64.deb
+sudo apt install ./y720-kbled_1.1.0-1_amd64.deb
+```
+
+To upgrade, install the newer `.deb` the same way.
+
+### Check the download
+
+Optionally, download `SHA256SUMS` from the same release into the same folder and run:
 
 ```bash
-packaging/build-deb.sh
-sudo apt install ./packaging/y720-kbled_1.0.0_amd64.deb
+sha256sum --check --ignore-missing SHA256SUMS
 ```
 
 ### Uninstall
+
+On Arch:
 
 ```bash
 sudo pacman -Rns y720-kbled
 ```
 
 This removes the app and also **deletes your saved profiles**.
+
+On Ubuntu, `sudo apt remove y720-kbled` keeps your profiles, and `sudo apt purge y720-kbled` deletes them too.
 
 ## Using it
 
@@ -151,7 +158,30 @@ Profiles are saved in `/var/lib/y720-kbled/config.json`.
 
 ## Building from source
 
-You need Rust and GTK 4.
+You need a Rust toolchain, for example through [rustup](https://rustup.rs), and GTK 4 with its development files.
+
+### Arch package
+
+```bash
+sudo pacman -S --needed base-devel gtk4
+cargo fetch --locked
+cd packaging
+makepkg -si
+```
+
+`cargo fetch` downloads the crates first, because the PKGBUILD builds offline.
+
+### Ubuntu package
+
+```bash
+sudo apt install build-essential pkg-config libgtk-4-dev
+packaging/build-deb.sh
+sudo apt install ./packaging/y720-kbled_1.1.0-1_amd64.deb
+```
+
+Build it on Ubuntu 24.04 itself. A package built on a newer system may not start on 24.04.
+
+### Just the program
 
 ```bash
 cargo build --release
@@ -159,6 +189,10 @@ cargo build --release
 ```
 
 Running it from a checkout doesn't change the colors by itself. The installed service does that.
+
+### Release packages
+
+Pushing a tag such as `v1.1.0` builds both packages on GitHub Actions and publishes them as a release, with the notes from [CHANGELOG.md](CHANGELOG.md). The tag must match the version in `Cargo.toml`, `packaging/PKGBUILD`, and `packaging/build-deb.sh`.
 
 ## Changes
 

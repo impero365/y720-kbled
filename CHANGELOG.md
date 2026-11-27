@@ -6,8 +6,13 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-27
+
 ### Added
 
+- Ready-made packages for Arch Linux and Ubuntu 24.04 on the GitHub Releases
+  page, so you no longer need to build the app yourself. The README explains
+  how to install them.
 - Arrow keys move through the color palette for the zone you are editing.
   Left and Right step to the previous or next color, and Up and Down move one
   row. Each step applies right away. The arrows do nothing while Off is
@@ -66,5 +71,6 @@ First release.
 - The `set` command changes the selected profile from a terminal.
 - Packages for Arch Linux (`makepkg`) and Ubuntu 24.04 (`build-deb.sh`).
 
-[Unreleased]: https://github.com/impero365/lenovo-Y720-keyboard-backlight/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/impero365/lenovo-Y720-keyboard-backlight/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/impero365/lenovo-Y720-keyboard-backlight/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/impero365/lenovo-Y720-keyboard-backlight/releases/tag/v1.0.0

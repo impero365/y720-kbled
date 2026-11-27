@@ -1,6 +1,6 @@
 [package]
 name = "y720-kbled"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 description = "Keyboard backlight control for the Lenovo Legion Y720"
 license = "ISC"
