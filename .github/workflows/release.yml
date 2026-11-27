@@ -1,0 +1,122 @@
+# Build the Arch and Ubuntu packages and publish them as a GitHub release.
+#
+# Runs on every pushed tag vX.Y.Z. To build an older tag again (or one pushed
+# before this workflow existed), run it by hand from the Actions tab, or with
+#   gh workflow run release.yml -f tag=v1.0.0
+# The code and packaging come from the tag. The release notes come from
+# CHANGELOG.md on the default branch, so older tags get notes too.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build, for example v1.0.0
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Tag matches the version in every file
+        run: |
+          want="${TAG#v}"
+          cargo=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          pkgver=$(sed -n 's/^pkgver=//p' packaging/PKGBUILD)
+          debver=$(sed -n 's/^version=//p' packaging/build-deb.sh)
+          echo "tag $want, Cargo.toml $cargo, PKGBUILD $pkgver, build-deb.sh $debver"
+          [ "$cargo" = "$want" ] && [ "$pkgver" = "$want" ] && [ "$debver" = "$want" ]
+
+  deb:
+    needs: check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libgtk-4-dev pkg-config
+      - run: cargo test --locked
+      - run: bash packaging/build-deb.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb
+          path: packaging/*.deb
+          if-no-files-found: error
+
+  arch:
+    needs: check
+    runs-on: ubuntu-24.04
+    container: archlinux:base-devel
+    steps:
+      - name: Install build dependencies
+        run: pacman -Syu --noconfirm --needed git gtk4 rust
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: makepkg
+        # makepkg will not run as root. The PKGBUILD builds offline, so fetch
+        # the crates first as the same user.
+        run: |
+          useradd -m builder
+          chown -R builder: "$GITHUB_WORKSPACE"
+          su builder -c 'cargo fetch --locked && cd packaging && makepkg --noconfirm'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: arch
+          path: packaging/*.pkg.tar.zst
+          if-no-files-found: error
+
+  release:
+    needs: [deb, arch]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums and release notes
+        run: |
+          (cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS)
+          v="${TAG#v}"
+          awk -v h="## [$v]" '
+            index($0, h) == 1 { on = 1; next }
+            on && /^## \[/ { exit }
+            on && /^\[[^]]+\]: / { exit }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          if ! grep -q '[^[:space:]]' notes.md; then
+            echo "CHANGELOG.md has no section for $v" >&2
+            exit 1
+          fi
+          cat notes.md
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file notes.md
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" --verify-tag --title "${TAG#v}" \
+              --notes-file notes.md dist/*
+          fi
