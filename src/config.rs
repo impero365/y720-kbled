@@ -146,10 +146,14 @@ impl Config {
             profile.check()?;
         }
         match self.profiles.iter().filter(|profile| profile.off).count() {
-            1 => Ok(()),
-            0 => Err(Error::Msg("the Off profile cannot be deleted".into())),
-            _ => Err(Error::Msg("there can be only one Off profile".into())),
+            1 => {}
+            0 => return Err(Error::Msg("the Off profile cannot be deleted".into())),
+            _ => return Err(Error::Msg("there can be only one Off profile".into())),
         }
+        if !self.profiles[0].off {
+            return Err(Error::Msg("the Off profile must stay first".into()));
+        }
+        Ok(())
     }
 
     /// Adds the Off profile to a config saved before it existed, and keeps
@@ -182,6 +186,19 @@ impl Config {
                 self.selected += 1;
             }
             changed = true;
+        } else if let Some(at) = self.profiles.iter().position(|profile| profile.off) {
+            // Off always heads the list. Move it there and keep the same
+            // profile selected.
+            if at != 0 {
+                let off = self.profiles.remove(at);
+                self.profiles.insert(0, off);
+                if self.selected == at {
+                    self.selected = 0;
+                } else if self.selected < at {
+                    self.selected += 1;
+                }
+                changed = true;
+            }
         }
         if self.selected >= self.profiles.len() {
             self.selected = self.profiles.len() - 1;
@@ -253,6 +270,18 @@ mod tests {
         assert!(config.profiles[0].off);
         assert_eq!(config.profiles[config.selected].name, "B");
         assert!(!config.ensure_off(), "a second pass changes nothing");
+
+        // Off found further down moves to the top, and the selection follows
+        // the same profile.
+        let mut moved = Config {
+            selected: 2,
+            profiles: vec![Profile::lit("A"), Profile::off(), Profile::lit("B")],
+        };
+        assert!(moved.check().is_err(), "Off must be first");
+        assert!(moved.ensure_off());
+        assert!(moved.profiles[0].off);
+        assert_eq!(moved.profiles[moved.selected].name, "B");
+        assert!(moved.check().is_ok());
         let saved = serde_json::to_string(&config).unwrap();
         assert_eq!(saved.matches("\"off\"").count(), 1, "only Off stores the flag");
     }

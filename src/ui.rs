@@ -1034,8 +1034,7 @@ fn accent_css(color: u8) -> String {
            background-color: alpha({hex}, 0.16); \
            border-color: alpha({hex}, 0.85); \
            box-shadow: 0 0 14px alpha({hex}, 0.22); }}\n\
-         button.choice.on box.bar.on {{ background-color: {hex}; }}\n\
-         button.link {{ color: mix({hex}, #f4f5f7, 0.35); }}\n"
+         button.choice.on box.bar.on {{ background-color: {hex}; }}\n"
     )
 }
 
@@ -1199,7 +1198,7 @@ fn stylesheet() -> String {
           padding: 2px 4px;
           font-size: 12px;
           font-weight: 600;
-          color: #c7cbd6;
+          color: #f4f5f7;
           text-decoration: none;
         }
         button.link label { text-decoration: none; }
@@ -1639,37 +1638,37 @@ fn draw_keyboard(panel: &Panel, cr: &gtk::cairo::Context, width: i32, height: i3
     let _ = cr.restore();
 }
 
-/// "Backlight Off" in red, centered on the keyboard, on a dark pill so it
-/// reads over the keys.
+/// "Backlight Off" in a soft red, centered on the keyboard, on a dim pill
+/// so it reads over the keys without shouting.
 fn draw_off_label(cr: &gtk::cairo::Context, layout: &KeyboardLayout) {
     let text = "Backlight Off";
     cr.select_font_face(
         "Sans",
         gtk::cairo::FontSlant::Normal,
-        gtk::cairo::FontWeight::Bold,
+        gtk::cairo::FontWeight::Normal,
     );
-    cr.set_font_size(layout.height * 0.13);
+    cr.set_font_size(layout.height * 0.095);
     let Ok(extents) = cr.text_extents(text) else {
         return;
     };
     let cx = layout.width / 2.0;
     let cy = layout.height / 2.0;
-    let pad_x = layout.height * 0.08;
-    let pad_y = layout.height * 0.05;
+    let pad_x = layout.height * 0.07;
+    let pad_y = layout.height * 0.045;
     let w = extents.width() + pad_x * 2.0;
     let h = extents.height() + pad_y * 2.0;
     rounded_rect(cr, cx - w / 2.0, cy - h / 2.0, w, h, h / 2.0);
-    cr.set_source_rgba(0.04, 0.04, 0.05, 0.82);
+    cr.set_source_rgba(0.05, 0.05, 0.06, 0.6);
     let _ = cr.fill_preserve();
-    cr.set_source_rgba(0.95, 0.25, 0.25, 0.55);
-    cr.set_line_width(1.5);
+    cr.set_source_rgba(0.88, 0.45, 0.45, 0.28);
+    cr.set_line_width(1.0);
     let _ = cr.stroke();
 
     cr.move_to(
         cx - extents.width() / 2.0 - extents.x_bearing(),
         cy - extents.height() / 2.0 - extents.y_bearing(),
     );
-    cr.set_source_rgb(1.0, 0.27, 0.27);
+    cr.set_source_rgba(0.90, 0.48, 0.48, 0.85);
     let _ = cr.show_text(text);
 }
 
