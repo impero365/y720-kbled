@@ -43,6 +43,9 @@ const SWATCH_ORDER: [usize; 20] = [
     19, 18, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
 ];
 
+/// Circles per row in the palette. Up and Down move by this much.
+const SWATCH_COLUMNS: u32 = 2;
+
 const BRIGHTNESS: [&str; 4] = ["Off", "Low", "Medium", "High"];
 /// Bytes written for those four labels. On this keyboard 3 matches 2, and 5 matches 4.
 const BRIGHTNESS_VALUES: [u8; 4] = [0, 1, 2, 4];
@@ -60,6 +63,9 @@ struct Panel {
     selected_zone: std::cell::Cell<usize>,
     refreshing: std::cell::Cell<bool>,
     writer: Arc<Mutex<Option<UnixStream>>>,
+    /// The latest config waiting for its frame to be painted. Several
+    /// changes within one frame send only the last one.
+    outbox: Rc<std::cell::RefCell<Option<Config>>>,
     window: gtk::ApplicationWindow,
     notice: gtk::Label,
     profiles: gtk::DropDown,
@@ -344,8 +350,8 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
     swatch_row.set_homogeneous(true);
     swatch_row.set_column_spacing(2);
     swatch_row.set_row_spacing(2);
-    swatch_row.set_min_children_per_line(2);
-    swatch_row.set_max_children_per_line(2);
+    swatch_row.set_min_children_per_line(SWATCH_COLUMNS);
+    swatch_row.set_max_children_per_line(SWATCH_COLUMNS);
     swatch_row.set_halign(Align::Start);
     swatch_row.add_css_class("choices");
     let swatches: [gtk::Button; 20] = std::array::from_fn(|index| {
@@ -445,6 +451,7 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
         selected_zone: std::cell::Cell::new(0),
         refreshing: std::cell::Cell::new(false),
         writer,
+        outbox: Rc::new(std::cell::RefCell::new(None)),
         window,
         notice,
         profiles,
@@ -535,6 +542,73 @@ fn wire_controls(panel: &Rc<Panel>) {
         }
     });
     panel.keyboard.add_controller(motion);
+
+    // Arrow keys walk the palette for the zone being edited, in the order
+    // the circles are shown. Capture phase, so focus movement between
+    // buttons does not take the arrows first.
+    let keys = gtk::EventControllerKey::new();
+    keys.set_propagation_phase(gtk::PropagationPhase::Capture);
+    let ui = Rc::clone(panel);
+    keys.connect_key_pressed(move |_, key, _, modifiers| {
+        // Tab and Shift+Tab pick the next or previous zone, wrapping around.
+        if matches!(key, gtk::gdk::Key::Tab | gtk::gdk::Key::ISO_Left_Tab) {
+            let other = gtk::gdk::ModifierType::CONTROL_MASK
+                | gtk::gdk::ModifierType::ALT_MASK
+                | gtk::gdk::ModifierType::SUPER_MASK;
+            if modifiers.intersects(other)
+                || ui.off_selected()
+                || typing(&ui.window)
+                || popup_open(&ui.profiles)
+            {
+                return glib::Propagation::Proceed;
+            }
+            let back = key == gtk::gdk::Key::ISO_Left_Tab
+                || modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK);
+            ui.selected_zone
+                .set(next_zone(ui.selected_zone.get(), back));
+            ui.render();
+            return glib::Propagation::Stop;
+        }
+        let step = match key {
+            gtk::gdk::Key::Left => -1,
+            gtk::gdk::Key::Right => 1,
+            gtk::gdk::Key::Up => -(SWATCH_COLUMNS as i32),
+            gtk::gdk::Key::Down => SWATCH_COLUMNS as i32,
+            _ => return glib::Propagation::Proceed,
+        };
+        let held = gtk::gdk::ModifierType::CONTROL_MASK
+            | gtk::gdk::ModifierType::ALT_MASK
+            | gtk::gdk::ModifierType::SHIFT_MASK
+            | gtk::gdk::ModifierType::SUPER_MASK;
+        if modifiers.intersects(held)
+            || ui.off_selected()
+            || typing(&ui.window)
+            || popup_open(&ui.profiles)
+        {
+            return glib::Propagation::Proceed;
+        }
+        let zone = ui.selected_zone.get();
+        let Some(current) = ui
+            .config
+            .borrow()
+            .as_ref()
+            .and_then(|config| config.profiles.get(config.selected))
+            .and_then(|profile| profile.zones.get(zone))
+            .map(|zone| zone.color as usize)
+        else {
+            return glib::Propagation::Proceed;
+        };
+        let next = palette_step(current, step);
+        if next != current {
+            with_config(&ui, |config| {
+                if let Some(profile) = config.profiles.get_mut(config.selected) {
+                    profile.zones[zone].color = next as u8;
+                }
+            });
+        }
+        glib::Propagation::Stop
+    });
+    panel.window.add_controller(keys);
 
     for (index, button) in panel.swatches.iter().enumerate() {
         let ui = Rc::clone(panel);
@@ -746,8 +820,79 @@ impl Panel {
         }
         self.set_notice("");
         self.render();
-        if let Err(error) = write_line(&self.writer, &ClientMsg::Set { config }) {
-            self.set_notice(&error);
+        self.send_after_paint(config);
+    }
+
+    /// Sends `config` to the service once the frame that shows it has been
+    /// painted, so the keyboard and the window change in the same refresh.
+    /// A window that is not on screen paints nothing, so it sends at once.
+    fn send_after_paint(&self, config: Config) {
+        let armed = self.outbox.replace(Some(config)).is_some();
+        if armed {
+            // A handler is already waiting for this frame. It sends the
+            // newest config.
+            return;
+        }
+        let clock = self
+            .keyboard
+            .is_mapped()
+            .then(|| self.keyboard.frame_clock())
+            .flatten();
+        let Some(clock) = clock else {
+            self.flush_outbox();
+            return;
+        };
+        let handler: Rc<std::cell::RefCell<Option<glib::SignalHandlerId>>> =
+            Rc::new(std::cell::RefCell::new(None));
+        let fallback: Rc<std::cell::RefCell<Option<glib::SourceId>>> =
+            Rc::new(std::cell::RefCell::new(None));
+
+        let flush = self.outbox_flusher();
+        let handler_in = Rc::clone(&handler);
+        let fallback_in = Rc::clone(&fallback);
+        let clock_in = clock.clone();
+        *handler.borrow_mut() = Some(clock.connect_after_paint(move |_| {
+            if let Some(id) = handler_in.borrow_mut().take() {
+                clock_in.disconnect(id);
+            }
+            if let Some(timer) = fallback_in.borrow_mut().take() {
+                timer.remove();
+            }
+            flush();
+        }));
+
+        // If no frame comes (the window was hidden in between), do not
+        // keep the change back for long.
+        let flush = self.outbox_flusher();
+        let fallback_in = Rc::clone(&fallback);
+        *fallback.borrow_mut() = Some(glib::timeout_add_local_once(SEND_FALLBACK, move || {
+            fallback_in.borrow_mut().take();
+            if let Some(id) = handler.borrow_mut().take() {
+                clock.disconnect(id);
+            }
+            flush();
+        }));
+    }
+
+    fn flush_outbox(&self) {
+        (self.outbox_flusher())();
+    }
+
+    /// Sends whatever waits in the outbox. Doing nothing when it is empty
+    /// makes it safe to call from both the frame and the fallback timer.
+    fn outbox_flusher(&self) -> impl Fn() + 'static {
+        let outbox = Rc::clone(&self.outbox);
+        let writer = Arc::clone(&self.writer);
+        let notice = self.notice.clone();
+        move || {
+            let Some(config) = outbox.borrow_mut().take() else {
+                return;
+            };
+            if let Err(error) = write_line(&writer, &ClientMsg::Set { config }) {
+                let text = sentence_case(error.trim());
+                notice.set_text(&text);
+                notice.set_visible(!text.is_empty());
+            }
         }
     }
 }
@@ -867,6 +1012,9 @@ fn service_loop(events: Sender<UiEvent>, writer: Arc<Mutex<Option<UnixStream>>>)
         delay = (delay * 2).min(RETRY_MAX);
     }
 }
+
+/// How long a change may wait for its frame before it is sent anyway.
+const SEND_FALLBACK: Duration = Duration::from_millis(100);
 
 const RETRY_FIRST: Duration = Duration::from_secs(1);
 const RETRY_MAX: Duration = Duration::from_secs(5);
@@ -1100,6 +1248,50 @@ fn set_on(widget: &impl WidgetExt, on: bool) {
 #[cfg(test)]
 fn brightness_name(value: u8) -> &'static str {
     BRIGHTNESS[brightness_choice(value)]
+}
+
+/// The zone after `zone`, or before it when `back` is set, wrapping from the
+/// numpad to the left zone and back.
+fn next_zone(zone: usize, back: bool) -> usize {
+    let count = ZONE_NAMES.len();
+    if back {
+        (zone + count - 1) % count
+    } else {
+        (zone + 1) % count
+    }
+}
+
+/// The color `step` places away from `color` in the order the palette shows
+/// them, stopping at the first and last circle.
+fn palette_step(color: usize, step: i32) -> usize {
+    let Some(at) = SWATCH_ORDER.iter().position(|&index| index == color) else {
+        return color;
+    };
+    let last = SWATCH_ORDER.len() as i32 - 1;
+    let to = at as i32 + step;
+    if !(0..=last).contains(&to) {
+        return color;
+    }
+    SWATCH_ORDER[to as usize]
+}
+
+/// True while the profile list is open, so arrows move through it.
+fn popup_open(dropdown: &gtk::DropDown) -> bool {
+    let mut child = dropdown.first_child();
+    while let Some(widget) = child {
+        if widget.is::<gtk::Popover>() && widget.is_visible() {
+            return true;
+        }
+        child = widget.next_sibling();
+    }
+    false
+}
+
+/// True while a text field has the keyboard, so arrows move its cursor.
+fn typing(window: &gtk::ApplicationWindow) -> bool {
+    gtk::prelude::GtkWindowExt::focus(window).is_some_and(|widget| {
+        widget.is::<gtk::Text>() || widget.is::<gtk::Entry>() || widget.is::<gtk::EditableLabel>()
+    })
 }
 
 /// Errors are lowercase by Rust convention. The window shows them as
@@ -1867,6 +2059,18 @@ mod tests {
         assert_eq!(ZONE_NAMES.len(), 4);
         assert!(stylesheet().contains("box.chip.c19"));
         assert!(stylesheet().contains("#e51012"));
+        assert_eq!(next_zone(0, false), 1);
+        assert_eq!(next_zone(3, false), 0, "numpad wraps to the left zone");
+        assert_eq!(next_zone(0, true), 3, "left wraps back to the numpad");
+        assert_eq!(next_zone(2, true), 1);
+        // Off-black, white, red, … in two columns.
+        assert_eq!(palette_step(19, 1), 18);
+        assert_eq!(palette_step(18, -1), 19);
+        assert_eq!(palette_step(19, -1), 19, "stops at the first circle");
+        assert_eq!(palette_step(19, SWATCH_COLUMNS as i32), 0);
+        assert_eq!(palette_step(0, -(SWATCH_COLUMNS as i32)), 19);
+        assert_eq!(palette_step(17, 1), 17, "stops at the last circle");
+        assert_eq!(palette_step(16, SWATCH_COLUMNS as i32), 16, "no row below");
         let mut order = SWATCH_ORDER;
         order.sort_unstable();
         assert_eq!(order, std::array::from_fn::<usize, 20, _>(|index| index));
