@@ -11,7 +11,7 @@ use gtk::prelude::*;
 use gtk::{Align, Orientation};
 
 use crate::cli::connect_service;
-use crate::config::{BacklightMode, Config};
+use crate::config::{BacklightMode, Config, Profile};
 use crate::error::Error;
 use crate::proto::{ClientMsg, ServerMsg};
 
@@ -70,6 +70,8 @@ struct Panel {
     apply_brightness: gtk::Button,
     keyboard: gtk::DrawingArea,
     brightness_hint: gtk::Label,
+    /// Hidden while the Off profile is selected.
+    lit_controls: [gtk::Widget; 3],
     hover_zone: std::cell::Cell<Option<usize>>,
     status: gtk::Label,
     accent: gtk::CssProvider,
@@ -382,6 +384,7 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
     let brightness: [gtk::Button; 4] = std::array::from_fn(|index| {
         let button = gtk::Button::new();
         button.add_css_class("choice");
+        button.add_css_class("level");
         let inner = gtk::Box::new(Orientation::Horizontal, 6);
         inner.set_halign(Align::Center);
         inner.append(&level_bars(index));
@@ -450,6 +453,11 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
         apply_brightness,
         keyboard,
         brightness_hint,
+        lit_controls: [
+            color_card.clone().upcast(),
+            brightness_card.clone().upcast(),
+            style_card.clone().upcast(),
+        ],
         hover_zone: std::cell::Cell::new(None),
         status,
         accent,
@@ -491,6 +499,9 @@ fn wire_controls(panel: &Rc<Panel>) {
     click.set_button(1);
     let ui = Rc::clone(panel);
     click.connect_released(move |_, _, x, y| {
+        if ui.off_selected() {
+            return;
+        }
         if let Some(zone) = zone_at(ui.keyboard.width(), ui.keyboard.height(), x, y) {
             ui.selected_zone.set(zone);
             ui.render();
@@ -501,7 +512,11 @@ fn wire_controls(panel: &Rc<Panel>) {
     let motion = gtk::EventControllerMotion::new();
     let ui = Rc::clone(panel);
     motion.connect_motion(move |_, x, y| {
-        let next = zone_at(ui.keyboard.width(), ui.keyboard.height(), x, y);
+        let next = if ui.off_selected() {
+            None
+        } else {
+            zone_at(ui.keyboard.width(), ui.keyboard.height(), x, y)
+        };
         if next != ui.hover_zone.get() {
             ui.hover_zone.set(next);
             ui.keyboard.queue_draw();
@@ -566,7 +581,11 @@ fn wire_controls(panel: &Rc<Panel>) {
         let parent = ui.window.clone();
         ask_name(&parent, "New profile", &suggested, move |name| {
             with_config(&ui, |config| {
-                let mut copy = config.profiles[config.selected].clone();
+                // Off is not a starting point: a profile made from it starts lit.
+                let mut copy = match config.profiles.get(config.selected) {
+                    Some(profile) if !profile.off => profile.clone(),
+                    _ => Profile::lit(&name),
+                };
                 copy.name = name;
                 config.profiles.push(copy);
                 config.selected = config.profiles.len() - 1;
@@ -588,7 +607,9 @@ fn wire_controls(panel: &Rc<Panel>) {
         ask_name(&parent, "Rename profile", &current, move |name| {
             with_config(&ui, |config| {
                 if let Some(profile) = config.profiles.get_mut(config.selected) {
-                    profile.name = name;
+                    if !profile.off {
+                        profile.name = name;
+                    }
                 }
             });
         });
@@ -597,10 +618,10 @@ fn wire_controls(panel: &Rc<Panel>) {
     let ui = Rc::clone(panel);
     panel.delete_profile.connect_clicked(move |_| {
         with_config(&ui, |config| {
-            if config.profiles.len() < 2 {
+            let index = config.selected.min(config.profiles.len().saturating_sub(1));
+            if config.profiles.get(index).is_none_or(|profile| profile.off) {
                 return;
             }
-            let index = config.selected.min(config.profiles.len() - 1);
             config.profiles.remove(index);
             if config.selected >= config.profiles.len() {
                 config.selected = config.profiles.len() - 1;
@@ -624,6 +645,14 @@ fn wire_controls(panel: &Rc<Panel>) {
 }
 
 impl Panel {
+    fn off_selected(&self) -> bool {
+        self.config
+            .borrow()
+            .as_ref()
+            .and_then(|config| config.profiles.get(config.selected))
+            .is_some_and(|profile| profile.off)
+    }
+
     fn set_status(&self, connected: bool) {
         self.status
             .set_text(if connected { "● Service running" } else { "● Not connected" });
@@ -654,8 +683,12 @@ impl Panel {
         }
         self.profiles.set_selected(config.selected as u32);
         self.refreshing.set(false);
-        self.delete_profile
-            .set_sensitive(config.profiles.len() >= 2);
+        // Off stays in the list for good, under the same name.
+        self.delete_profile.set_sensitive(!profile.off);
+        self.rename_profile.set_sensitive(!profile.off);
+        for widget in &self.lit_controls {
+            widget.set_visible(!profile.off);
+        }
 
         let zone_label = format!(
             "{} zone",
@@ -997,7 +1030,7 @@ fn accent_css(color: u8) -> String {
         index => COLORS.get(index as usize).map(|(hex, _)| *hex).unwrap_or("#f4f5f7"),
     };
     format!(
-        "button.choice.on {{ \
+        "button.choice.level.on {{ \
            background-color: alpha({hex}, 0.16); \
            border-color: alpha({hex}, 0.85); \
            box-shadow: 0 0 14px alpha({hex}, 0.22); }}\n\
@@ -1094,7 +1127,7 @@ fn stylesheet() -> String {
           background-color: rgba(255, 255, 255, 0.03);
           border: 1px solid rgba(255, 255, 255, 0.07);
           border-radius: 12px;
-          padding: 3px 3px 3px 12px;
+          padding: 1px 3px 1px 12px;
         }
         .eyebrow, .section {
           font-size: 11px;
@@ -1110,17 +1143,17 @@ fn stylesheet() -> String {
           background-color: rgba(255, 255, 255, 0.035);
           border: 1px solid rgba(255, 255, 255, 0.07);
           border-radius: 18px;
-          padding: 18px;
+          padding: 10px 18px;
           box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
         }
-        .swatch-card { padding: 8px; }
-        .control-row { padding: 6px 8px 6px 12px; border-radius: 14px; }
+        .swatch-card { padding: 4px 8px; }
+        .control-row { padding: 3px 8px 3px 12px; border-radius: 14px; }
         .notice {
           background-color: rgba(255, 170, 60, 0.10);
           color: #ffd9a8;
           border: 1px solid rgba(255, 170, 60, 0.35);
           border-radius: 12px;
-          padding: 10px 14px;
+          padding: 6px 14px;
         }
         button.action, button.primary, button.choice, button.swatch,
         button.link {
@@ -1204,7 +1237,12 @@ fn stylesheet() -> String {
           font-weight: 600;
         }
         button.choice:hover { background: rgba(255, 255, 255, 0.08); background-image: none; }
-        button.choice.on { color: #ffffff; }
+        button.choice.on {
+          color: #ffffff;
+          background-color: rgba(255, 255, 255, 0.12);
+          border-color: rgba(255, 255, 255, 0.75);
+          box-shadow: 0 0 12px rgba(255, 255, 255, 0.12);
+        }
         box.bar {
           background-color: rgba(255, 255, 255, 0.18);
           border-radius: 2px;
@@ -1529,9 +1567,16 @@ fn parse_hex(hex: &str) -> (f64, f64, f64) {
 fn draw_keyboard(panel: &Panel, cr: &gtk::cairo::Context, width: i32, height: i32) {
     let layout = keyboard_layout();
     let (scale, ox, oy) = frame_for(width as f64, height as f64, layout);
-    let paints = zone_paints(panel);
-    let selected = panel.selected_zone.get();
-    let hover = panel.hover_zone.get();
+    let off = panel.off_selected();
+    let mut paints = zone_paints(panel);
+    if off {
+        // Unlit caps, no glow, no selection.
+        for paint in &mut paints {
+            paint.black = true;
+        }
+    }
+    let selected = if off { usize::MAX } else { panel.selected_zone.get() };
+    let hover = if off { None } else { panel.hover_zone.get() };
 
     let _ = cr.save();
     cr.translate(ox, oy);
@@ -1588,7 +1633,44 @@ fn draw_keyboard(panel: &Panel, cr: &gtk::cairo::Context, width: i32, height: i3
             zone == selected,
         );
     }
+    if off {
+        draw_off_label(cr, layout);
+    }
     let _ = cr.restore();
+}
+
+/// "Backlight Off" in red, centered on the keyboard, on a dark pill so it
+/// reads over the keys.
+fn draw_off_label(cr: &gtk::cairo::Context, layout: &KeyboardLayout) {
+    let text = "Backlight Off";
+    cr.select_font_face(
+        "Sans",
+        gtk::cairo::FontSlant::Normal,
+        gtk::cairo::FontWeight::Bold,
+    );
+    cr.set_font_size(layout.height * 0.13);
+    let Ok(extents) = cr.text_extents(text) else {
+        return;
+    };
+    let cx = layout.width / 2.0;
+    let cy = layout.height / 2.0;
+    let pad_x = layout.height * 0.08;
+    let pad_y = layout.height * 0.05;
+    let w = extents.width() + pad_x * 2.0;
+    let h = extents.height() + pad_y * 2.0;
+    rounded_rect(cr, cx - w / 2.0, cy - h / 2.0, w, h, h / 2.0);
+    cr.set_source_rgba(0.04, 0.04, 0.05, 0.82);
+    let _ = cr.fill_preserve();
+    cr.set_source_rgba(0.95, 0.25, 0.25, 0.55);
+    cr.set_line_width(1.5);
+    let _ = cr.stroke();
+
+    cr.move_to(
+        cx - extents.width() / 2.0 - extents.x_bearing(),
+        cy - extents.height() / 2.0 - extents.y_bearing(),
+    );
+    cr.set_source_rgb(1.0, 0.27, 0.27);
+    let _ = cr.show_text(text);
 }
 
 fn zone_bounds(layout: &KeyboardLayout, zone: usize) -> Option<(f64, f64, f64, f64)> {

@@ -390,29 +390,41 @@ mod tests {
 
         let mut client = wait_client(&socket);
         let mut next = Config::load(&config_path).unwrap();
-        next.profiles[0].name = "Red".into();
-        next.profiles[0].zones[0].color = 3;
+        next.profiles[1].name = "Red".into();
+        next.profiles[1].zones[0].color = 3;
         let updated = client.set_config(next).unwrap();
-        assert_eq!(updated.profiles[0].name, "Red");
+        assert_eq!(updated.profiles[1].name, "Red");
+        assert_eq!(applied.lock().unwrap().len(), 1);
+
+        // A config without Off is refused and nothing is written.
+        let mut without_off = Config::load(&config_path).unwrap();
+        without_off.profiles.remove(0);
+        without_off.selected = 0;
+        assert!(client.set_config(without_off).is_err());
         assert_eq!(applied.lock().unwrap().len(), 1);
 
         hotkey_tx.send(Hotkey::Show).unwrap();
         thread::sleep(Duration::from_millis(150));
         assert!(client.read().unwrap().is_show());
 
+        // Cycling from the last profile lands on Off, which writes every
+        // zone at brightness 0.
         hotkey_tx.send(Hotkey::Cycle).unwrap();
         let cycled = client.read().unwrap();
         assert_eq!(cycled.config().unwrap().selected, 0);
+        let last = applied.lock().unwrap().last().cloned().unwrap();
+        assert!(last.off);
+        assert!(last.zones.iter().all(|zone| zone.brightness == 0));
 
         let mut second = Config::load(&config_path).unwrap();
-        second.profiles.push(second.profiles[0].clone());
-        second.profiles[1].name = "Two".into();
+        second.profiles.push(second.profiles[1].clone());
+        second.profiles[2].name = "Two".into();
         client.set_config(second).unwrap();
         hotkey_tx.send(Hotkey::Cycle).unwrap();
         let cycled = client.read().unwrap();
         assert_eq!(cycled.config().unwrap().selected, 1);
         assert_eq!(
-            Config::load(&config_path).unwrap().profiles[0].zones[0].color,
+            Config::load(&config_path).unwrap().profiles[1].zones[0].color,
             3
         );
 

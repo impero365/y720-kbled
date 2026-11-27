@@ -9,6 +9,7 @@ use crate::error::Error;
 pub const ZONE_COUNT: usize = 4;
 pub const COLOR_MAX: u8 = 19;
 pub const BRIGHTNESS_MAX: u8 = 5;
+pub const OFF_NAME: &str = "Off";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -69,15 +70,48 @@ pub struct Profile {
     pub name: String,
     pub mode: BacklightMode,
     pub zones: [Zone; ZONE_COUNT],
+    /// The built-in profile that turns the backlight off. Every config has
+    /// exactly one. It cannot be renamed, edited, or deleted.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub off: bool,
 }
 
 impl Profile {
+    pub fn off() -> Self {
+        Self {
+            name: OFF_NAME.into(),
+            mode: BacklightMode::AlwaysOn,
+            zones: [Zone {
+                color: 0,
+                brightness: 0,
+            }; ZONE_COUNT],
+            off: true,
+        }
+    }
+
+    /// A lit profile with the default color, for a new profile made while
+    /// Off is selected.
+    pub fn lit(name: &str) -> Self {
+        Self {
+            name: name.into(),
+            mode: BacklightMode::AlwaysOn,
+            zones: [Zone {
+                color: 0,
+                brightness: 3,
+            }; ZONE_COUNT],
+            off: false,
+        }
+    }
+
     pub fn check(&self) -> Result<(), Error> {
         if self.name.trim().is_empty() {
             return Err(Error::Msg("profile name is empty".into()));
         }
         for zone in self.zones {
             zone.check()?;
+        }
+        if self.off && *self != Self::off() {
+            return Err(Error::Msg("the Off profile cannot be changed".into()));
         }
         Ok(())
     }
@@ -91,17 +125,9 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        let zone = Zone {
-            color: 0,
-            brightness: 3,
-        };
         Self {
-            selected: 0,
-            profiles: vec![Profile {
-                name: "Profile 1".into(),
-                mode: BacklightMode::AlwaysOn,
-                zones: [zone; ZONE_COUNT],
-            }],
+            selected: 1,
+            profiles: vec![Profile::off(), Profile::lit("Profile 1")],
         }
     }
 }
@@ -119,7 +145,49 @@ impl Config {
         for profile in &self.profiles {
             profile.check()?;
         }
-        Ok(())
+        match self.profiles.iter().filter(|profile| profile.off).count() {
+            1 => Ok(()),
+            0 => Err(Error::Msg("the Off profile cannot be deleted".into())),
+            _ => Err(Error::Msg("there can be only one Off profile".into())),
+        }
+    }
+
+    /// Adds the Off profile to a config saved before it existed, and keeps
+    /// the same profile selected. Returns true when it changed anything.
+    pub fn ensure_off(&mut self) -> bool {
+        let mut changed = false;
+        let mut seen = false;
+        let mut index = 0;
+        while index < self.profiles.len() {
+            if self.profiles[index].off {
+                if seen {
+                    self.profiles.remove(index);
+                    if self.selected > index {
+                        self.selected -= 1;
+                    }
+                    changed = true;
+                    continue;
+                }
+                seen = true;
+                if self.profiles[index] != Profile::off() {
+                    self.profiles[index] = Profile::off();
+                    changed = true;
+                }
+            }
+            index += 1;
+        }
+        if !seen {
+            self.profiles.insert(0, Profile::off());
+            if self.profiles.len() > 1 {
+                self.selected += 1;
+            }
+            changed = true;
+        }
+        if self.selected >= self.profiles.len() {
+            self.selected = self.profiles.len() - 1;
+            changed = true;
+        }
+        changed
     }
 
     pub fn selected_profile(&self) -> Result<&Profile, Error> {
@@ -147,7 +215,10 @@ impl Config {
             return Ok(config);
         }
         let text = fs::read_to_string(path)?;
-        let config: Config = serde_json::from_str(&text)?;
+        let mut config: Config = serde_json::from_str(&text)?;
+        if config.ensure_off() {
+            config.save(path)?;
+        }
         config.check()?;
         Ok(config)
     }
@@ -170,6 +241,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn older_configs_gain_off_and_keep_their_selection() {
+        let json = r#"{"selected":1,"profiles":[
+            {"name":"A","mode":"always_on","zones":[{"color":1,"brightness":2},{"color":1,"brightness":2},{"color":1,"brightness":2},{"color":1,"brightness":2}]},
+            {"name":"B","mode":"wave","zones":[{"color":2,"brightness":4},{"color":2,"brightness":4},{"color":2,"brightness":4},{"color":2,"brightness":4}]}
+        ]}"#;
+        let mut config: Config = serde_json::from_str(json).unwrap();
+        assert!(config.ensure_off());
+        assert!(config.check().is_ok());
+        assert_eq!(config.profiles.len(), 3);
+        assert!(config.profiles[0].off);
+        assert_eq!(config.profiles[config.selected].name, "B");
+        assert!(!config.ensure_off(), "a second pass changes nothing");
+        let saved = serde_json::to_string(&config).unwrap();
+        assert_eq!(saved.matches("\"off\"").count(), 1, "only Off stores the flag");
+    }
+
+    #[test]
     fn roundtrip_and_cycle_do_not_alias_zones() {
         let dir = std::env::temp_dir().join(format!(
             "y720-config-{}-{}",
@@ -182,18 +270,20 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("config.json");
         let mut config = Config::default();
-        let mut second = config.profiles[0].clone();
+        let mut second = config.profiles[1].clone();
         second.name = "Profile 2".into();
         second.zones[0].color = 12;
         config.profiles.push(second);
         config.save(&path).unwrap();
         let mut loaded = Config::load(&path).unwrap();
-        loaded.profiles[1].zones[0].color = 4;
-        assert_eq!(loaded.profiles[0].zones[0].color, 0);
+        loaded.profiles[2].zones[0].color = 4;
+        assert_eq!(loaded.profiles[1].zones[0].color, 0);
+        // Fn+Space cycles through Off as well.
         loaded.cycle();
-        assert_eq!(loaded.selected, 1);
+        assert_eq!(loaded.selected, 2);
         loaded.cycle();
         assert_eq!(loaded.selected, 0);
+        assert!(loaded.profiles[0].off);
         let _ = fs::remove_dir_all(dir);
     }
 
@@ -205,6 +295,19 @@ mod tests {
         let mut config = Config::default();
         config.profiles[0].zones[0].color = 20;
         assert!(config.check().is_err());
+        let mut config = Config::default();
+        config.profiles.remove(0);
+        config.selected = 0;
+        assert!(config.check().is_err(), "Off cannot be deleted");
+        let mut config = Config::default();
+        config.profiles[0].zones[2].brightness = 4;
+        assert!(config.check().is_err(), "Off cannot be lit");
+        let mut config = Config::default();
+        config.profiles[0].name = "Dark".into();
+        assert!(config.check().is_err(), "Off cannot be renamed");
+        let mut config = Config::default();
+        config.profiles.push(Profile::off());
+        assert!(config.check().is_err(), "only one Off");
         assert!(BacklightMode::parse("always-on").is_ok());
         assert!(BacklightMode::parse("nope").is_err());
     }

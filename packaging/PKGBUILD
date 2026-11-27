@@ -1,6 +1,6 @@
 pkgname=y720-kbled
 pkgver=0.1.0
-pkgrel=6
+pkgrel=8
 pkgdesc='Keyboard backlight controller for the Lenovo Legion Y720'
 arch=('x86_64')
 url='https://github.com/impero365/y720-kbled'

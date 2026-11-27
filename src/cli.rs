@@ -192,6 +192,12 @@ fn set(
     let mode = mode.map(|value| BacklightMode::parse(&value)).transpose()?;
     with_config(|config| {
         let profile = config.selected_profile_mut()?;
+        if profile.off {
+            return Err(Error::Msg(
+                "the Off profile is selected and cannot be changed. Select another profile first"
+                    .into(),
+            ));
+        }
         if let Some(mode) = mode {
             profile.mode = mode;
         }
