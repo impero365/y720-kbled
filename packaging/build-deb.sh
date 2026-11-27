@@ -4,7 +4,7 @@
 set -euo pipefail
 
 root=$(cd "$(dirname "$0")/.." && pwd)
-version=0.1.0
+version=1.0.0
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
 
