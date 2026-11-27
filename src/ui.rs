@@ -38,6 +38,11 @@ const COLORS: [(&str, &str); 20] = [
     ("#000000", "Black"),
 ];
 
+/// Black (off) and white first, then the rainbow. Indexes into `COLORS`.
+const SWATCH_ORDER: [usize; 20] = [
+    19, 18, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17,
+];
+
 const BRIGHTNESS: [&str; 4] = ["Off", "Low", "Medium", "High"];
 /// Bytes written for those four labels. On this keyboard 3 matches 2, and 5 matches 4.
 const BRIGHTNESS_VALUES: [u8; 4] = [0, 1, 2, 4];
@@ -64,13 +69,10 @@ struct Panel {
     delete_profile: gtk::Button,
     apply_brightness: gtk::Button,
     keyboard: gtk::DrawingArea,
-    color_hint: gtk::Label,
     brightness_hint: gtk::Label,
     hover_zone: std::cell::Cell<Option<usize>>,
     status: gtk::Label,
     accent: gtk::CssProvider,
-    color_dot: gtk::Box,
-    color_value: gtk::Label,
     swatches: [gtk::Button; 20],
     brightness: [gtk::Button; 4],
     modes: [gtk::Button; 5],
@@ -245,36 +247,31 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
     window.set_size_request(420, 240);
     window.set_icon_name(Some("y720-kbled"));
 
-    let page = gtk::Box::new(Orientation::Vertical, 16);
+    let page = gtk::Box::new(Orientation::Vertical, 10);
     page.add_css_class("page");
-    page.set_margin_top(20);
-    page.set_margin_bottom(24);
-    page.set_margin_start(24);
-    page.set_margin_end(24);
+    page.set_margin_top(10);
+    page.set_margin_bottom(14);
+    page.set_margin_start(14);
+    page.set_margin_end(14);
 
-    let header = gtk::Box::new(Orientation::Horizontal, 14);
+    let header = gtk::Box::new(Orientation::Horizontal, 8);
     header.add_css_class("header");
-    let logo = gtk::Image::from_paintable(Some(&app_logo()));
-    logo.set_pixel_size(44);
-    logo.add_css_class("logo");
-    let titles = gtk::Box::new(Orientation::Vertical, 2);
-    titles.set_valign(Align::Center);
-    titles.set_hexpand(true);
+    let logo = gtk::DrawingArea::new();
+    logo.set_content_width(18);
+    logo.set_content_height(18);
+    logo.set_valign(Align::Center);
+    logo.set_draw_func(|_, cr, width, height| draw_palette(cr, width, height));
     let title = gtk::Label::new(Some("Lenovo Y720 Keyboard Backlight"));
     title.add_css_class("title");
     title.set_halign(Align::Start);
+    title.set_valign(Align::Center);
+    title.set_hexpand(true);
     title.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    let subtitle = gtk::Label::new(Some("Four zones · saved by the backlight service"));
-    subtitle.add_css_class("subtitle");
-    subtitle.set_halign(Align::Start);
-    subtitle.set_ellipsize(gtk::pango::EllipsizeMode::End);
-    titles.append(&title);
-    titles.append(&subtitle);
     let status = gtk::Label::new(Some("Connecting"));
     status.add_css_class("status");
     status.set_valign(Align::Center);
     header.append(&logo);
-    header.append(&titles);
+    header.append(&title);
     header.append(&status);
 
     let profile_model = gtk::StringList::new(&[]);
@@ -296,7 +293,7 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
     delete_profile.set_sensitive(false);
     let profile_label = gtk::Label::new(Some("PROFILE"));
     profile_label.add_css_class("eyebrow");
-    let profile_row = gtk::Box::new(Orientation::Horizontal, 8);
+    let profile_row = gtk::Box::new(Orientation::Horizontal, 4);
     profile_row.add_css_class("toolbar");
     profile_row.append(&profile_label);
     profile_row.append(&profiles);
@@ -311,8 +308,8 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
     notice.set_wrap(true);
     notice.set_visible(false);
 
-    let keyboard_card = card();
-    keyboard_card.add_css_class("keyboard-card");
+    // No card around the keyboard: the drawing has its own chassis.
+    let keyboard_card = gtk::Box::new(Orientation::Vertical, 16);
     let keyboard = gtk::DrawingArea::new();
     keyboard.add_css_class("keyboard");
     keyboard.set_hexpand(true);
@@ -337,26 +334,12 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
     keyboard_card.append(&keyboard);
 
     let color_card = card();
-    let color_heading = gtk::Box::new(Orientation::Horizontal, 8);
-    let (color_title, color_hint) = section("Color", "Left zone");
-    color_heading.append(&color_title);
-    let color_dot = gtk::Box::new(Orientation::Horizontal, 0);
-    color_dot.add_css_class("dot");
-    color_dot.set_valign(Align::Center);
-    color_dot.set_size_request(12, 12);
-    let color_value = gtk::Label::new(None);
-    color_value.add_css_class("value");
-    color_value.set_halign(Align::End);
-    let value_box = gtk::Box::new(Orientation::Horizontal, 8);
-    value_box.set_halign(Align::Start);
-    value_box.set_margin_start(4);
-    value_box.append(&color_dot);
-    value_box.append(&color_value);
+    color_card.add_css_class("swatch-card");
     let swatch_row = gtk::FlowBox::new();
     swatch_row.set_selection_mode(gtk::SelectionMode::None);
     swatch_row.set_homogeneous(true);
-    swatch_row.set_column_spacing(6);
-    swatch_row.set_row_spacing(6);
+    swatch_row.set_column_spacing(2);
+    swatch_row.set_row_spacing(2);
     swatch_row.set_min_children_per_line(2);
     swatch_row.set_max_children_per_line(2);
     swatch_row.set_halign(Align::Start);
@@ -373,18 +356,20 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
         chip.add_css_class(&format!("c{index}"));
         chip.set_size_request(22, 22);
         button.set_child(Some(&chip));
-        swatch_row.insert(&button, -1);
         button
     });
-    color_card.append(&color_heading);
+    for index in SWATCH_ORDER {
+        swatch_row.insert(&swatches[index], -1);
+    }
     color_card.append(&swatch_row);
-    keyboard_card.append(&value_box);
 
     // The colors sit beside the keyboard, so the page needs one row less.
     keyboard_card.set_hexpand(true);
-    keyboard.set_vexpand(true);
+    // Top-aligned: the keyboard and its color line sit at the top of the
+    // column, and any extra height goes below them.
+    keyboard_card.set_valign(Align::Start);
     color_card.set_hexpand(false);
-    let top = gtk::Box::new(Orientation::Horizontal, 16);
+    let top = gtk::Box::new(Orientation::Horizontal, 10);
     top.append(&keyboard_card);
     top.append(&color_card);
 
@@ -425,7 +410,7 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
     });
     style_card.append(&mode_row);
 
-    let split = gtk::Box::new(Orientation::Horizontal, 16);
+    let split = gtk::Box::new(Orientation::Horizontal, 10);
     split.set_homogeneous(true);
     brightness_card.set_hexpand(true);
     style_card.set_hexpand(true);
@@ -468,13 +453,10 @@ fn build_panel(app: &gtk::Application, writer: Arc<Mutex<Option<UnixStream>>>) -
         delete_profile,
         apply_brightness,
         keyboard,
-        color_hint,
         brightness_hint,
         hover_zone: std::cell::Cell::new(None),
         status,
         accent,
-        color_dot,
-        color_value,
         swatches,
         brightness,
         modes,
@@ -683,19 +665,10 @@ impl Panel {
             "{} zone",
             ZONE_NAMES.get(zone_index).copied().unwrap_or("Selected")
         );
-        self.color_hint.set_text(&zone_label);
         self.brightness_hint.set_text(&zone_label);
         self.keyboard.queue_draw();
 
         let zone = profile.zones[zone_index];
-        let (hex, color_name) = COLORS
-            .get(zone.color as usize)
-            .copied()
-            .unwrap_or(("", ""));
-        self.color_value
-            .set_text(&format!("{color_name}  {}", hex.to_uppercase()));
-        set_color_class(&self.color_dot, zone.color);
-        set_on(&self.color_dot, zone.color != 19);
         self.accent.load_from_string(&accent_css(zone.color));
         for (index, button) in self.swatches.iter().enumerate() {
             set_on(button, index == profile.zones[zone_index].color as usize);
@@ -982,16 +955,42 @@ fn level_bars(level: usize) -> gtk::Box {
     bars
 }
 
-fn app_logo() -> gtk::gdk::Texture {
-    let bytes = glib::Bytes::from_static(include_bytes!("../assets/icon.png"));
-    gtk::gdk::Texture::from_bytes(&bytes).expect("the bundled icon is a PNG")
-}
+/// A painter's palette with four paint dots, one per zone color family.
+fn draw_palette(cr: &gtk::cairo::Context, width: i32, height: i32) {
+    let size = f64::from(width.min(height));
+    let _ = cr.save();
+    cr.translate(
+        (f64::from(width) - size) / 2.0,
+        (f64::from(height) - size) / 2.0,
+    );
+    cr.scale(size / 24.0, size / 24.0);
+    let pi = std::f64::consts::PI;
 
-fn set_color_class(widget: &impl WidgetExt, color: u8) {
-    for index in 0..COLORS.len() {
-        widget.remove_css_class(&format!("c{index}"));
+    // Body, with a thumb hole cut out by the even-odd rule.
+    cr.new_path();
+    cr.save().ok();
+    cr.translate(12.0, 12.0);
+    cr.scale(1.0, 0.86);
+    cr.arc(0.0, 0.0, 11.0, 0.0, 2.0 * pi);
+    cr.restore().ok();
+    cr.new_sub_path();
+    cr.arc(15.6, 16.2, 2.3, 0.0, 2.0 * pi);
+    cr.set_fill_rule(gtk::cairo::FillRule::EvenOdd);
+    cr.set_source_rgb(0.86, 0.88, 0.92);
+    let _ = cr.fill();
+
+    for (x, y, hex) in [
+        (6.6, 10.6, "#e51012"),
+        (10.2, 6.4, "#ffaa01"),
+        (15.2, 6.6, "#00ffab"),
+        (18.4, 10.6, "#5500fe"),
+    ] {
+        let (r, g, b) = parse_hex(hex);
+        cr.arc(x, y, 2.1, 0.0, 2.0 * pi);
+        cr.set_source_rgb(r, g, b);
+        let _ = cr.fill();
     }
-    widget.add_css_class(&format!("c{color}"));
+    let _ = cr.restore();
 }
 
 /// Tints the selected buttons with the color of the zone being edited.
@@ -1072,21 +1071,19 @@ fn stylesheet() -> String {
           background-image: radial-gradient(circle at 15% 0%, rgba(120, 130, 255, 0.07), transparent 45%),
                             linear-gradient(180deg, #13151b, #0c0d10);
         }
-        image.logo { -gtk-icon-size: 44px; }
         .title {
-          font-size: 21px;
+          font-size: 14px;
           font-weight: 800;
           letter-spacing: -0.2px;
         }
-        .subtitle { color: #8a90a0; font-size: 13px; }
         label.status {
-          font-size: 12px;
+          font-size: 11px;
           font-weight: 600;
           color: #ffb4a8;
           background-color: rgba(255, 110, 90, 0.10);
           border: 1px solid rgba(255, 110, 90, 0.30);
           border-radius: 999px;
-          padding: 5px 12px;
+          padding: 2px 9px;
         }
         label.status.on {
           color: #9ff0c0;
@@ -1096,8 +1093,8 @@ fn stylesheet() -> String {
         .toolbar {
           background-color: rgba(255, 255, 255, 0.03);
           border: 1px solid rgba(255, 255, 255, 0.07);
-          border-radius: 14px;
-          padding: 6px 6px 6px 14px;
+          border-radius: 12px;
+          padding: 3px 3px 3px 12px;
         }
         .eyebrow, .section {
           font-size: 11px;
@@ -1108,7 +1105,6 @@ fn stylesheet() -> String {
         .eyebrow { margin-right: 4px; }
         .section { font-size: 12px; color: #dfe2e9; }
         .hint { color: #727888; font-size: 12px; }
-        .value { color: #cfd3dc; font-size: 13px; font-family: monospace; }
         .card {
           background-color: rgba(255, 255, 255, 0.035);
           border: 1px solid rgba(255, 255, 255, 0.07);
@@ -1116,7 +1112,7 @@ fn stylesheet() -> String {
           padding: 18px;
           box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
         }
-        .keyboard-card { padding: 14px 14px 14px 14px; }
+        .swatch-card { padding: 8px; }
         .notice {
           background-color: rgba(255, 170, 60, 0.10);
           color: #ffd9a8;
@@ -1137,8 +1133,8 @@ fn stylesheet() -> String {
           background-image: none;
           color: #dfe2e9;
           border: 1px solid transparent;
-          border-radius: 10px;
-          padding: 7px 12px;
+          border-radius: 9px;
+          padding: 4px 10px;
         }
         button.action:hover {
           background: rgba(255, 255, 255, 0.07);
@@ -1188,21 +1184,13 @@ fn stylesheet() -> String {
           color: #eef0f4;
           border: none;
           box-shadow: none;
-          padding: 7px 12px;
+          padding: 4px 10px;
           font-weight: 600;
         }
         dropdown.profile > button:hover {
           background: rgba(255, 255, 255, 0.05);
           background-image: none;
         }
-        box.dot {
-          border-radius: 999px;
-          min-width: 12px;
-          min-height: 12px;
-          opacity: 0.35;
-          border: 1px solid rgba(255, 255, 255, 0.25);
-        }
-        box.dot.on { opacity: 1; }
         button.choice {
           background: rgba(255, 255, 255, 0.04);
           background-image: none;
@@ -1221,7 +1209,7 @@ fn stylesheet() -> String {
         }
         box.bar.on { background-color: #eef0f4; }
         button.swatch {
-          padding: 2px;
+          padding: 1px;
           border-radius: 999px;
           background: transparent;
           background-image: none;
@@ -1292,10 +1280,17 @@ fn stylesheet() -> String {
     );
     for (index, (hex, _)) in COLORS.iter().enumerate() {
         css.push_str(&format!(
-            "box.chip.c{index}, box.dot.c{index} {{ background: {hex}; background-image: none; }}\n\
+            "box.chip.c{index} {{ background: {hex}; background-image: none; }}\n\
              button.swatch.s{index}.on {{ box-shadow: 0 0 10px alpha({hex}, 0.55); }}\n"
         ));
     }
+    // Black turns the zone off. A red slash says so.
+    css.push_str(
+        "box.chip.c19 { background-color: #000000; \
+           background-image: linear-gradient(135deg, transparent 44%, #e51012 44%, \
+           #e51012 56%, transparent 56%); }\n\
+         button.swatch.s19.on { box-shadow: 0 0 10px alpha(#e51012, 0.45); }\n",
+    );
     css
 }
 
@@ -1444,7 +1439,8 @@ fn frame_for(width: f64, height: f64, layout: &KeyboardLayout) -> (f64, f64, f64
     }
     let scale = (width / layout.width).min(height / layout.height);
     let ox = (width - layout.width * scale) / 2.0;
-    let oy = (height - layout.height * scale) / 2.0;
+    // Centered across, pinned to the top.
+    let oy = 0.0;
     (scale, ox, oy)
 }
 
@@ -1737,6 +1733,10 @@ mod tests {
         assert_eq!(ZONE_NAMES.len(), 4);
         assert!(stylesheet().contains("box.chip.c19"));
         assert!(stylesheet().contains("#e51012"));
+        let mut order = SWATCH_ORDER;
+        order.sort_unstable();
+        assert_eq!(order, std::array::from_fn::<usize, 20, _>(|index| index));
+        assert_eq!(&SWATCH_ORDER[..2], &[19, 18]);
     }
 
     #[test]
