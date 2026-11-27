@@ -6,6 +6,11 @@ All notable changes to this project are listed here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- New app icon: a close-up of the Y720's backlit keys, instead of the frog. It
+  shows in the app launcher, the window, and the tray.
+
 ## [1.1.1] - 2026-11-27
 
 ### Changed
