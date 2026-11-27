@@ -34,3 +34,7 @@ Flatpak does not fit hidraw and evdev. Do not add it.
 ## Checks
 
 `cargo test` covers the protocol helpers and the service. A green test run does not mean the keyboard changed color. Say so when the devices were not opened. `sudo` on this machine needs a password, so do not claim a udev rule or a package was installed unless the command succeeded.
+
+## Changelog
+
+`CHANGELOG.md` follows Keep a Changelog. Every user-visible change adds a line under `## [Unreleased]` in the same change, written for people who use the app. On a release, rename that section to the version and date, start a new empty `[Unreleased]`, and update the compare links at the bottom. The version in `Cargo.toml`, `pkgver` in `packaging/PKGBUILD`, `version` in `packaging/build-deb.sh`, and the git tag `vX.Y.Z` match.
